@@ -49,10 +49,11 @@ export async function createDashboardApp(paths: DataPaths, options: { staticDir?
     const tools = await Promise.all(Object.values(adapters).map(async (adapter) => ({ tool: adapter.id, detection: await adapter.detect(context), checks: await adapter.verify({ mode: "full", features: {} }, context) })));
     return { tools };
   });
-  app.get("/", async (_request, reply) => {
-    if (staticDir) return reply.sendFile("index.html");
-    return reply.type("text/html").send("<!doctype html><title>Don't Waste</title><main><h1>Don't Waste dashboard API</h1><p>Build the dashboard package to serve the local SPA.</p></main>");
-  });
+  if (!staticDir) {
+    app.get("/", async (_request, reply) => {
+      return reply.type("text/html").send("<!doctype html><title>Don't Waste</title><main><h1>Don't Waste dashboard API</h1><p>Build the dashboard package to serve the local SPA.</p></main>");
+    });
+  }
 
   return { app, close: async () => { store.close(); await app.close(); } };
 }
