@@ -1,0 +1,12 @@
+services:
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      DONT_WASTE_DATA_DIR: /data
+      DONT_WASTE_DASHBOARD_HOST: 0.0.0.0
+    volumes:
+      - ${DONT_WASTE_HOST_DATA_DIR:?Set this to your local Don’t Waste data directory}:/data
+    ports:
+      - "127.0.0.1:3000:3000"

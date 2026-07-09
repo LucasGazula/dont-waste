@@ -1,0 +1,20 @@
+{
+  "name": "@dont-waste/telemetry",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dont-waste/catalog": "workspace:*",
+    "@dont-waste/core": "workspace:*",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@dont-waste/test-fixtures": "workspace:*"
+  }
+}
