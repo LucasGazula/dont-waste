@@ -12,8 +12,8 @@ export abstract class BaseAdapter implements ToolAdapter {
 
   getCapabilities(agent: AgentId): Capability[] { return capabilities.filter((item) => item.tool === this.id && item.agent === agent); }
 
-  protected basePlan(context: AdapterContext, commands: Command[], warnings: string[] = [], affectedPaths: string[] = []): OperationPlan {
-    return { tool: this.id, commands, warnings, affectedPaths, capabilities: context.selectedAgents.map((agent) => ({ agent, capability: getCapability(this.id, agent) })) };
+  protected basePlan(selection: ToolSelection, context: AdapterContext, commands: Command[], warnings: string[] = [], affectedPaths: string[] = []): OperationPlan {
+    return { tool: this.id, selection, commands, warnings, affectedPaths, capabilities: context.selectedAgents.map((agent) => ({ agent, capability: getCapability(this.id, agent) })) };
   }
 
   async install(plan: OperationPlan, context: AdapterContext): Promise<InstallResult> {

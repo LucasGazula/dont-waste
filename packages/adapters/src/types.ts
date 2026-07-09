@@ -35,6 +35,7 @@ export type ToolSelection = { mode: Mode; features: Record<string, boolean> };
 
 export type OperationPlan = {
   tool: ToolId;
+  selection: ToolSelection;
   commands: Command[];
   affectedPaths: string[];
   warnings: string[];
