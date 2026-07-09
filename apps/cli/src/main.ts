@@ -4,7 +4,7 @@ import process from "node:process";
 import { cancel, confirm, intro, isCancel, multiselect, note, outro, select, spinner } from "@clack/prompts";
 import { createAdapters, detectAgents, type AdapterContext, type OperationPlan, type ToolSelection } from "@dont-waste/adapters";
 import { agentIds, agents, balancedSelection, toolIds, type AgentId, type Mode, type ToolId } from "@dont-waste/catalog";
-import { createOperation, getDataPaths, listOperations, readConfig, restoreOperation, setIntegration, updateOperation, writeConfig, type DontWasteConfig } from "@dont-waste/core";
+import { createOperation, getDataPaths, readConfig, restoreOperation, setIntegration, updateOperation, writeConfig } from "@dont-waste/core";
 import { createDashboardServer } from "@dont-waste/dashboard-api";
 import { TelemetryStore, aggregateEvents } from "@dont-waste/telemetry";
 import { Command, Option } from "commander";
@@ -269,18 +269,26 @@ addCommonOptions(program.command("rollback <id>").description("restore the confi
 });
 
 addCommonOptions(program.command("uninstall").description("remove Don’t Waste managed integrations without deleting upstream tools adopted from the user")).action(async (options: CommonOptions) => {
-  if (options.dryRun) return result({ dryRun: true, action: "run adapter uninstallers then restore managed snapshots; telemetry stays local" }, options);
+  if (options.dryRun) return result({ dryRun: true, action: "run adapter uninstallers and clear Don’t Waste integrations; telemetry stays local; use rollback <id> for a specific snapshot" }, options);
   requireConfirmation(options);
-  if (!options.yes && process.stdin.isTTY && !checked(await confirm({ message: "Remove managed integrations and restore their snapshots?", initialValue: false }))) return;
+  if (!options.yes && process.stdin.isTTY && !checked(await confirm({ message: "Remove managed integrations and clear Don’t Waste activation state?", initialValue: false }))) return;
   const paths = getDataPaths();
   const config = await readConfig(paths);
   const selectedAgents = Object.keys(config.integrations) as AgentId[];
   const operation = await createOperation(paths, "uninstall", { selectedAgents }, [paths.config]);
   const adapterResults = await Promise.all(toolIds.map((tool) => createAdapters()[tool].uninstall(context(selectedAgents, false))));
-  const restoreCandidates = (await listOperations(paths)).filter((item) => (item.type === "init" || item.type === "update") && item.status === "succeeded").reverse();
-  for (const candidate of restoreCandidates) await restoreOperation(paths, candidate.id);
+  // Do not restore historical init/update snapshots: that can reapply later user edits
+  // or undo the adapter uninstallers. Targeted recovery remains `dont-waste rollback <id>`.
+  await writeConfig(paths, { ...config, integrations: {}, profile: "install-only" });
   await updateOperation(paths, operation.id, "succeeded");
-  result({ operation: operation.id, adapters: adapterResults, restoredSnapshots: restoreCandidates.map((item) => item.id), telemetry: "preserved" }, options);
+  result({
+    operation: operation.id,
+    adapters: adapterResults,
+    clearedIntegrations: selectedAgents,
+    restoredSnapshots: [],
+    telemetry: "preserved",
+    note: "Historical snapshots were not auto-restored. Use dont-waste rollback <id> if you need a specific pre-init file state.",
+  }, options);
 });
 
 program.parseAsync().catch((error: unknown) => {
