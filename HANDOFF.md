@@ -41,15 +41,15 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 
 ## Verificações
 
-- Rodar após integração residual: `pnpm lint`, `typecheck`, `test`, `build`, `git diff --check`, smoke CLI dry-run.
+- Release audit em `2f1c29b`: HANDOFF ↔ `advanced-controls.ts` consistente (só `outputShaper`/`ccrTtl` em MCP marker-owned; learn/mcp-shrink/RTK TTL pending).
+- Comandos: `pnpm lint`, `typecheck`, `test`, `build`, `git diff --check`, smoke CLI com `HOME`/`DONT_WASTE_DATA_DIR` temporários.
 
 ## Pendências reais
 
 1. **Playwright** — sem infra no monorepo.
 2. **Docker daemon** — smoke script existe; validação real ainda indisponível neste WSL.
 3. **npm publish / site** `dont-waste.dev` — fora de escopo até release.
-4. **MCP-shrink / learn --verbosity / RTK temporal TTL** — pending/unsupported (ver contratos em `advanced-controls.ts`).
-5. CCR via wrap/proxy shell env fora de MCP permanece manual.
+4. **CCR manual** — env CCR via wrap/proxy shell fora de MCP permanece manual (MCP marker-owned já cobre `ccrTtl` quando habilitado).
 
 ## Regras
 
