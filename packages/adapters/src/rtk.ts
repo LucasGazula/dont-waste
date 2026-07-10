@@ -97,7 +97,16 @@ export class RtkAdapter extends BaseAdapter {
     } catch (error) { return { source: "rtk gain", events: [], error: error instanceof Error ? error.message : String(error) }; }
   }
 
-  async uninstall(context: AdapterContext) {
-    return { succeeded: true, executed: [], skipped: [], errors: ["RTK has no stable generic uninstall command. Restore the recorded configuration snapshot with dont-waste rollback."] };
+  async uninstallPaths(): Promise<string[]> {
+    return [];
+  }
+
+  async uninstall(_context: AdapterContext) {
+    return {
+      succeeded: true,
+      executed: [],
+      skipped: [{ command: "rtk", args: ["uninstall"], label: "RTK has no stable generic uninstall; use dont-waste rollback for snapshots" }],
+      errors: [],
+    };
   }
 }

@@ -1,6 +1,6 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
-import { createAdapters } from "@dont-waste/adapters";
+import { configuredToolsFromConfig, createAdapters } from "@dont-waste/adapters";
 import { agents, capabilities, upstream } from "@dont-waste/catalog";
 import { readConfig, type DataPaths } from "@dont-waste/core";
 import { TelemetryStore } from "@dont-waste/telemetry";
@@ -45,10 +45,23 @@ export async function createDashboardApp(paths: DataPaths, options: { staticDir?
   app.get("/api/tools", async () => ({ tools: upstream, agents, capabilities }));
   app.get("/api/health", async () => {
     const config = await readConfig(paths);
-    const selectedAgents = Object.keys(config.integrations) as (typeof agents)[number]["id"][];
-    const context = { platform: process.platform, home: process.env.HOME ?? process.env.USERPROFILE ?? "", selectedAgents, dryRun: true } as const;
     const adapters = createAdapters();
-    const tools = await Promise.all(Object.values(adapters).map(async (adapter) => ({ tool: adapter.id, detection: await adapter.detect(context), checks: await adapter.verify({ mode: "full", features: {} }, context) })));
+    const configured = configuredToolsFromConfig(config);
+    const tools = await Promise.all(Object.values(adapters).map(async (adapter) => {
+      const entry = configured.find((item) => item.tool === adapter.id);
+      const context = {
+        platform: process.platform,
+        home: process.env.HOME ?? process.env.USERPROFILE ?? "",
+        selectedAgents: entry?.agents ?? [],
+        dryRun: true,
+      } as const;
+      const detection = await adapter.detect(context);
+      if (!entry) {
+        return { tool: adapter.id, detection, status: "skipped", reason: "not enabled in Don’t Waste config", checks: [] };
+      }
+      const checks = await adapter.verify(entry.selection, context);
+      return { tool: adapter.id, detection, status: "checked", selection: entry.selection, agents: entry.agents, checks };
+    }));
     return { tools };
   });
   if (!staticDir) {

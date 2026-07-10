@@ -3,7 +3,7 @@ import { type AgentId } from "@dont-waste/catalog";
 import { importHeadroomJson } from "@dont-waste/telemetry";
 import { getAgentPaths } from "./agents.js";
 import { BaseAdapter } from "./base.js";
-import { headroomMcpSpec, mcpConfigPath, readMcpServer, registerHeadroomMcp, type McpRegisterResult } from "./mcp.js";
+import { headroomMcpSpec, mcpConfigPath, readMcpServer, registerHeadroomMcp, unregisterHeadroomMcp, type McpRegisterResult } from "./mcp.js";
 import { executableDetection, findExecutable } from "./runtime.js";
 import type { AdapterContext, HealthCheck, InstallResult, MetricImportResult, OperationPlan, ToolSelection } from "./types.js";
 
@@ -26,7 +26,7 @@ export class HeadroomAdapter extends BaseAdapter {
     }
     for (const agent of context.selectedAgents) {
       const wrapper = wrapName[agent];
-      if (wrapper) commands.push({ command: "headroom", args: ["wrap", wrapper], label: `Launch ${agent} through Headroom`, interactive: true });
+      if (wrapper) commands.push({ command: "headroom", args: ["wrap", wrapper], label: `Launch ${agent} through Headroom`, interactive: true, optional: true });
     }
     const affectedPaths = [
       ...context.selectedAgents.flatMap((agent) => getAgentPaths(agent, context)),
@@ -96,8 +96,33 @@ export class HeadroomAdapter extends BaseAdapter {
     } catch (error) { return { source: "headroom perf", events: [], error: error instanceof Error ? error.message : String(error) }; }
   }
 
-  async uninstall(context: AdapterContext) {
-    const plan = this.basePlan({ mode: "off", features: {} }, context, context.selectedAgents.flatMap((agent) => wrapName[agent] ? [{ command: "headroom", args: ["unwrap", wrapName[agent] as string], label: `Unwrap ${agent}` }] : []));
-    return this.install(plan, context);
+  async uninstallPaths(context: AdapterContext): Promise<string[]> {
+    return [...new Set(context.selectedAgents.map((agent) => mcpConfigPath(agent, context)).filter((file): file is string => Boolean(file)))];
+  }
+
+  async uninstall(context: AdapterContext): Promise<InstallResult> {
+    const detected = await this.detect(context);
+    const unwrap = detected.detected
+      ? context.selectedAgents.flatMap((agent) => wrapName[agent]
+        ? [{ command: "headroom", args: ["unwrap", wrapName[agent] as string], label: `Unwrap ${agent}`, optional: true }]
+        : [])
+      : [];
+    const base = unwrap.length
+      ? await this.install(this.basePlan({ mode: "off", features: {} }, context, unwrap), context)
+      : { succeeded: true, executed: [], skipped: [], errors: [] as string[] };
+    // Unwrap failures must not block marker-owned MCP cleanup.
+    const errors: string[] = [];
+    if (!context.dryRun) {
+      for (const agent of context.selectedAgents.filter((item) => mcpAgents.includes(item))) {
+        const removed = await unregisterHeadroomMcp(agent, context);
+        if (removed.status === "failed") errors.push(`MCP ${agent}: ${removed.detail}`);
+      }
+    }
+    return {
+      succeeded: errors.length === 0,
+      executed: base.executed,
+      skipped: base.skipped,
+      errors: [...errors, ...base.errors.map((item) => `unwrap (non-blocking): ${item}`)],
+    };
   }
 }

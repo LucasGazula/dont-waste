@@ -222,6 +222,77 @@ export async function registerHeadroomMcp(agent: AgentId, spec: McpServerSpec, c
   }
 }
 
+export type McpUnregisterStatus = "removed" | "absent" | "preserved" | "unsupported" | "failed";
+export type McpUnregisterResult = { agent: AgentId; status: McpUnregisterStatus; path?: string | undefined; detail: string };
+
+async function unregisterCodex(context: Pick<AdapterContext, "home">): Promise<McpUnregisterResult> {
+  const file = codexConfigPath(context);
+  let content = "";
+  try { content = await readFile(file, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { agent: "codex", status: "absent", path: file, detail: "no config.toml" };
+    throw error;
+  }
+  if (!content.includes(MARKER_START) || !content.includes(MARKER_END)) {
+    return { agent: "codex", status: "preserved", path: file, detail: "no Don’t Waste Headroom markers; left untouched" };
+  }
+  const start = content.indexOf(MARKER_START);
+  const end = content.indexOf(MARKER_END) + MARKER_END.length;
+  const next = `${content.slice(0, start).replace(/\n*$/, "")}\n${content.slice(end).replace(/^\n*/, "")}`.replace(/\n{3,}/g, "\n\n");
+  await writeFile(file, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+  return { agent: "codex", status: "removed", path: file, detail: "removed marker-owned Headroom MCP block" };
+}
+
+async function unregisterClaude(context: Pick<AdapterContext, "home">): Promise<McpUnregisterResult> {
+  const file = claudeMcpConfigPath(context);
+  let current: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) current = parsed as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { agent: "claude-code", status: "absent", path: file, detail: "no mcp.json" };
+    throw error;
+  }
+  const servers = current.mcpServers && typeof current.mcpServers === "object" && !Array.isArray(current.mcpServers)
+    ? { ...(current.mcpServers as Record<string, unknown>) }
+    : {};
+  if (!("headroom" in servers)) return { agent: "claude-code", status: "absent", path: file, detail: "no headroom entry" };
+  delete servers.headroom;
+  await writeFile(file, `${JSON.stringify({ ...current, mcpServers: servers }, null, 2)}\n`, "utf8");
+  return { agent: "claude-code", status: "removed", path: file, detail: "removed headroom MCP entry" };
+}
+
+async function unregisterOpencode(context: Pick<AdapterContext, "home" | "platform">): Promise<McpUnregisterResult> {
+  const file = opencodeConfigPath(context);
+  let current: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) current = parsed as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { agent: "opencode", status: "absent", path: file, detail: "no opencode.json" };
+    throw error;
+  }
+  const mcp = current.mcp && typeof current.mcp === "object" && !Array.isArray(current.mcp)
+    ? { ...(current.mcp as Record<string, unknown>) }
+    : {};
+  if (!("headroom" in mcp)) return { agent: "opencode", status: "absent", path: file, detail: "no headroom entry" };
+  delete mcp.headroom;
+  await writeFile(file, `${JSON.stringify({ ...current, mcp }, null, 2)}\n`, "utf8");
+  return { agent: "opencode", status: "removed", path: file, detail: "removed headroom MCP entry" };
+}
+
+/** Remove only Don’t Waste–owned Headroom MCP entries; preserve user-managed configs. */
+export async function unregisterHeadroomMcp(agent: AgentId, context: Pick<AdapterContext, "home" | "platform">): Promise<McpUnregisterResult> {
+  try {
+    if (agent === "codex") return unregisterCodex(context);
+    if (agent === "claude-code") return unregisterClaude(context);
+    if (agent === "opencode") return unregisterOpencode(context);
+    return { agent, status: "unsupported", detail: `${agent} has no Headroom MCP unregistrar` };
+  } catch (error) {
+    return { agent, status: "failed", detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export function headroomMcpSpec(command: string): McpServerSpec {
   return { name: "headroom", command, args: ["mcp", "serve"] };
 }

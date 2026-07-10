@@ -6,6 +6,8 @@ export type Command = {
   args: string[];
   label: string;
   interactive?: boolean | undefined;
+  /** Interactive/skipped commands with optional=true do not block integration activation. */
+  optional?: boolean | undefined;
   shell?: boolean | undefined;
 };
 
@@ -53,5 +55,7 @@ export interface ToolAdapter {
   install(plan: OperationPlan, context: AdapterContext): Promise<InstallResult>;
   verify(selection: ToolSelection, context: AdapterContext): Promise<HealthCheck[]>;
   collectMetrics(context: AdapterContext): Promise<MetricImportResult>;
+  /** Paths this uninstall may change; used to snapshot before mutation. */
+  uninstallPaths(context: AdapterContext): Promise<string[]>;
   uninstall(context: AdapterContext): Promise<InstallResult>;
 }

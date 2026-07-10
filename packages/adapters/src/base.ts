@@ -8,6 +8,7 @@ export abstract class BaseAdapter implements ToolAdapter {
   abstract planInstall(selection: ToolSelection, context: AdapterContext): ReturnType<ToolAdapter["planInstall"]>;
   abstract verify(selection: ToolSelection, context: AdapterContext): ReturnType<ToolAdapter["verify"]>;
   abstract collectMetrics(context: AdapterContext): ReturnType<ToolAdapter["collectMetrics"]>;
+  abstract uninstallPaths(context: AdapterContext): ReturnType<ToolAdapter["uninstallPaths"]>;
   abstract uninstall(context: AdapterContext): ReturnType<ToolAdapter["uninstall"]>;
 
   getCapabilities(agent: AgentId): Capability[] { return capabilities.filter((item) => item.tool === this.id && item.agent === agent); }

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import process from "node:process";
 import { cancel, confirm, intro, isCancel, multiselect, note, outro, select, spinner } from "@clack/prompts";
-import { createAdapters, detectAgents, type AdapterContext, type OperationPlan, type ToolSelection } from "@dont-waste/adapters";
+import { createAdapters, detectAgents, configuredToolsFromConfig, shouldActivateIntegration, type AdapterContext, type InstallResult, type OperationPlan, type ToolSelection } from "@dont-waste/adapters";
 import { agents, balancedSelection, toolIds, type AgentId, type Mode, type ToolId } from "@dont-waste/catalog";
 import { createOperation, getDataPaths, readConfig, restoreOperation, setIntegration, updateOperation, writeConfig } from "@dont-waste/core";
 import { createDashboardServer } from "@dont-waste/dashboard-api";
@@ -126,11 +126,18 @@ async function applyPlan(plan: PlanResult, operationType: "init" | "update", opt
   const operation = await createOperation(paths, operationType, { request: plan.request, plans: plan.plans }, affected);
   await updateOperation(paths, operation.id, "running");
   const adapters = createAdapters();
-  const results: Array<{ tool: ToolId; succeeded: boolean; errors: string[] }> = [];
+  const results: Array<{ tool: ToolId; succeeded: boolean; errors: string[]; skippedInteractive: string[] }> = [];
   try {
+    const installByTool = new Map<ToolId, InstallResult>();
     for (const toolPlan of plan.plans) {
       const installed = await adapters[toolPlan.tool].install(toolPlan, context(plan.request.profile === "install-only" ? [] : plan.request.selectedAgents, false));
-      results.push({ tool: toolPlan.tool, succeeded: installed.succeeded, errors: installed.errors });
+      installByTool.set(toolPlan.tool, installed);
+      results.push({
+        tool: toolPlan.tool,
+        succeeded: installed.succeeded,
+        errors: installed.errors,
+        skippedInteractive: installed.skipped.filter((command) => command.interactive && !command.optional).map((command) => command.label),
+      });
       if (!installed.succeeded) throw new Error(installed.errors.join("; "));
     }
     const checks = await Promise.all(plan.plans.map(async (item) => ({ tool: item.tool, checks: await adapters[item.tool].verify(plan.request.selections[item.tool]!, context(plan.request.selectedAgents, false)) })));
@@ -139,13 +146,20 @@ async function applyPlan(plan: PlanResult, operationType: "init" | "update", opt
     const telemetry = await TelemetryStore.open(paths);
     for (const diagnostic of plan.diagnostics) telemetry.recordAgent(diagnostic.agent, diagnostic.existingConfigs[0], diagnostic.version);
     for (const item of checks) {
-      const failed = item.checks.some((check) => check.status === "fail");
       const selected = plan.request.selections[item.tool]!;
-      if (plan.request.profile !== "install-only" && !failed) for (const agent of plan.request.selectedAgents) {
-        config = setIntegration(config, agent, item.tool, selected.mode, selected.features);
-        telemetry.recordIntegration(agent, item.tool, selected.features, item.checks.some((check) => check.status === "warn") ? "pending" : "active", operation.id);
+      const installed = installByTool.get(item.tool)!;
+      const activate = shouldActivateIntegration({ profile: plan.request.profile, checks: item.checks, install: installed });
+      if (activate) {
+        for (const agent of plan.request.selectedAgents) {
+          config = setIntegration(config, agent, item.tool, selected.mode, selected.features);
+          telemetry.recordIntegration(agent, item.tool, selected.features, "active", operation.id);
+        }
+      } else if (plan.request.profile !== "install-only") {
+        for (const agent of plan.request.selectedAgents) {
+          telemetry.recordIntegration(agent, item.tool, selected.features, item.checks.some((check) => check.status === "fail") || !installed.succeeded ? "failed" : "pending", operation.id);
+        }
       }
-      telemetry.recordInstallation(item.tool, plan.diagnostics.find((entry) => entry.id === item.tool)?.version, plan.request.channel, failed ? "failed" : "succeeded");
+      telemetry.recordInstallation(item.tool, plan.diagnostics.find((entry) => entry.id === item.tool)?.version, plan.request.channel, activate ? "succeeded" : "failed");
     }
     telemetry.recordOperation(operation.id, operationType, plan, "succeeded", operation.snapshotFile);
     telemetry.close();
@@ -224,12 +238,23 @@ async function runStatus(options: CommonOptions): Promise<void> {
 async function runDoctor(options: CommonOptions): Promise<void> {
   const paths = getDataPaths();
   const config = await readConfig(paths);
-  const selectedAgents = Object.keys(config.integrations) as AgentId[];
   const adapters = createAdapters();
+  const configured = configuredToolsFromConfig(config);
   const checks = [];
-  for (const tool of toolIds) checks.push({ tool, checks: await adapters[tool].verify({ mode: "full", features: {} }, context(selectedAgents, true)) });
+  for (const tool of toolIds) {
+    const entry = configured.find((item) => item.tool === tool);
+    if (!entry) {
+      checks.push({ tool, status: "skipped", reason: "not enabled in Don’t Waste config", checks: [] });
+      continue;
+    }
+    const toolChecks = await adapters[tool].verify(entry.selection, context(entry.agents, true));
+    const failed = toolChecks.some((check) => check.status === "fail");
+    const warned = toolChecks.some((check) => check.status === "warn");
+    checks.push({ tool, status: failed ? "fail" : warned ? "warn" : "pass", selection: entry.selection, agents: entry.agents, checks: toolChecks });
+  }
   const database = await TelemetryStore.open(paths); database.close();
-  result({ checks, database: { status: "pass", path: paths.database } }, options);
+  const overall = checks.some((item) => item.status === "fail") ? "fail" : checks.some((item) => item.status === "warn") ? "warn" : "pass";
+  result({ overall, checks, database: { status: "pass", path: paths.database } }, options);
 }
 
 async function runCollect(options: CommonOptions): Promise<void> {
@@ -289,25 +314,48 @@ async function runRollback(id: string, options: CommonOptions): Promise<void> {
 }
 
 async function runUninstall(options: CommonOptions): Promise<void> {
-  if (options.dryRun) return result({ dryRun: true, action: "run adapter uninstallers and clear Don’t Waste integrations; telemetry stays local; use rollback <id> for a specific snapshot" }, options);
+  if (options.dryRun) return result({ dryRun: true, action: "snapshot altered paths, remove marker-owned files, clear Don’t Waste integrations; telemetry stays local; use rollback <id> for a specific snapshot" }, options);
   requireConfirmation(options);
   if (!options.yes && process.stdin.isTTY && !checked(await confirm({ message: "Remove managed integrations and clear Don’t Waste activation state?", initialValue: false }))) return;
   const paths = getDataPaths();
   const config = await readConfig(paths);
   const selectedAgents = Object.keys(config.integrations) as AgentId[];
-  const operation = await createOperation(paths, "uninstall", { selectedAgents }, [paths.config]);
-  const adapterResults = await Promise.all(toolIds.map((tool) => createAdapters()[tool].uninstall(context(selectedAgents, false))));
-  // Do not restore historical init/update snapshots: that can reapply later user edits
-  // or undo the adapter uninstallers. Targeted recovery remains `dont-waste rollback <id>`.
+  const adapters = createAdapters();
+  const ctx = context(selectedAgents, false);
+  const affected = [...new Set([
+    paths.config,
+    ...(await Promise.all(toolIds.map((tool) => adapters[tool].uninstallPaths(ctx)))).flat(),
+  ])];
+  const operation = await createOperation(paths, "uninstall", { selectedAgents, affected }, affected);
+  await updateOperation(paths, operation.id, "running");
+  const adapterResults = [];
+  for (const tool of toolIds) {
+    adapterResults.push({ tool, ...(await adapters[tool].uninstall(ctx)) });
+  }
+  const failed = adapterResults.filter((item) => !item.succeeded);
+  if (failed.length) {
+    await restoreOperation(paths, operation.id);
+    await updateOperation(paths, operation.id, "failed", failed.map((item) => `${item.tool}: ${item.errors.join("; ")}`).join(" | "));
+    result({
+      operation: operation.id,
+      succeeded: false,
+      adapters: adapterResults,
+      restoredSnapshot: true,
+      note: "Uninstall failed; previous files were restored from the operation snapshot.",
+    }, options);
+    process.exitCode = 1;
+    return;
+  }
   await writeConfig(paths, { ...config, integrations: {}, profile: "install-only" });
   await updateOperation(paths, operation.id, "succeeded");
   result({
     operation: operation.id,
+    succeeded: true,
     adapters: adapterResults,
     clearedIntegrations: selectedAgents,
-    restoredSnapshots: [],
+    affectedPaths: affected,
     telemetry: "preserved",
-    note: "Historical snapshots were not auto-restored. Use dont-waste rollback <id> if you need a specific pre-init file state.",
+    note: "Only marker-owned Don’t Waste files were removed. Use dont-waste rollback <id> if you need a specific pre-init file state.",
   }, options);
 }
 

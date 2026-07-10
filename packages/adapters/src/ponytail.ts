@@ -1,17 +1,22 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentId, Mode } from "@dont-waste/catalog";
 import { getAgentPaths, ponytailConfigPath } from "./agents.js";
 import { BaseAdapter } from "./base.js";
-import { executableDetection, findExecutable } from "./runtime.js";
-import type { AdapterContext, Command, HealthCheck, InstallResult, MetricImportResult, OperationPlan, ToolSelection } from "./types.js";
+import { findExecutable } from "./runtime.js";
+import type { AdapterContext, Command, DetectionResult, HealthCheck, InstallResult, MetricImportResult, OperationPlan, ToolSelection } from "./types.js";
 
 const repository = "DietrichGebert/ponytail";
+const OWNED_MARKER = "dont-waste-owned";
 
 /** Ponytail only accepts lite/full/ultra; map unsupported catalog modes to full. */
 export function resolvePonytailMode(mode: Mode): "lite" | "full" | "ultra" {
   if (mode === "lite" || mode === "ultra") return mode;
   return "full";
+}
+
+export function ponytailActivePath(context: Pick<AdapterContext, "home">): string {
+  return path.join(context.home, ".config", "ponytail", ".ponytail-active");
 }
 
 function commandsFor(agent: AgentId): Command[] {
@@ -56,14 +61,42 @@ async function updateJson(file: string, transform: (value: Record<string, unknow
 
 export class PonytailAdapter extends BaseAdapter {
   readonly id = "ponytail" as const;
-  async detect(_context: AdapterContext) { return executableDetection(this.id, "node"); }
+
+  async detect(context: AdapterContext): Promise<DetectionResult> {
+    const node = await findExecutable("node", context.platform);
+    const configFile = ponytailConfigPath(context);
+    const marker = ponytailActivePath(context);
+    let configPresent = false;
+    let markerPresent = false;
+    try { await access(configFile); configPresent = true; } catch { /* absent */ }
+    try { await access(marker); markerPresent = true; } catch { /* absent */ }
+    if (!configPresent && !markerPresent) {
+      return {
+        id: this.id,
+        detected: false,
+        warnings: [node
+          ? "Ponytail is not installed (no config/marker); Node.js is available for hooks"
+          : "Ponytail is not installed; Node.js on PATH is required for always-on hooks"],
+      };
+    }
+    return {
+      id: this.id,
+      detected: true,
+      path: configPresent ? configFile : marker,
+      warnings: node ? [] : ["Ponytail config found but Node.js is absent from PATH"],
+    };
+  }
 
   async planInstall(selection: ToolSelection, context: AdapterContext): Promise<OperationPlan> {
     const commands = context.selectedAgents.flatMap(commandsFor);
-    const affectedPaths = [ponytailConfigPath(context), ...context.selectedAgents.flatMap((agent) => getAgentPaths(agent, context))];
+    const affectedPaths = context.selectedAgents.length
+      ? [ponytailConfigPath(context), ponytailActivePath(context), ...context.selectedAgents.flatMap((agent) => getAgentPaths(agent, context))]
+      : [];
     const mode = resolvePonytailMode(selection.mode);
     return this.basePlan(selection, context, commands, [
-      `Ponytail default mode: ${mode}. It keeps validation, error handling, security, and accessibility intact.`,
+      context.selectedAgents.length === 0
+        ? "install-only: Don’t Waste will not write Ponytail or agent configuration files."
+        : `Ponytail default mode: ${mode}. It keeps validation, error handling, security, and accessibility intact.`,
       "Codex hook approval is intentionally manual: Don’t Waste will not trust hooks on your behalf.",
       context.selectedAgents.includes("opencode") ? "OpenCode receives @dietrichgebert/ponytail in opencode.json during install." : "",
     ].filter(Boolean), affectedPaths);
@@ -72,9 +105,12 @@ export class PonytailAdapter extends BaseAdapter {
   async install(plan: OperationPlan, context: AdapterContext) {
     const base = await super.install(plan, context);
     if (!base.succeeded || context.dryRun) return base;
+    if (!context.selectedAgents.length) return base;
     const configFile = ponytailConfigPath(context);
     const defaultMode = resolvePonytailMode(plan.selection.mode);
-    await updateJson(configFile, (value) => ({ ...value, defaultMode }));
+    await updateJson(configFile, (value) => ({ ...value, defaultMode, [OWNED_MARKER]: true }));
+    await mkdir(path.dirname(ponytailActivePath(context)), { recursive: true });
+    await writeFile(ponytailActivePath(context), `${defaultMode}\n`, "utf8");
     if (context.selectedAgents.includes("opencode")) {
       const config = getAgentPaths("opencode", context)[0];
       if (config) await updateJson(config, (value) => {
@@ -115,25 +151,63 @@ export class PonytailAdapter extends BaseAdapter {
     return { source: "ponytail", events: [], error: "Ponytail has no operational token telemetry; upstream benchmarks remain reference-only." };
   }
 
+  async uninstallPaths(context: AdapterContext): Promise<string[]> {
+    const paths = [ponytailConfigPath(context), ponytailActivePath(context)];
+    if (context.selectedAgents.includes("opencode") || context.selectedAgents.length === 0) {
+      paths.push(...getAgentPaths("opencode", context));
+    }
+    return [...new Set(paths)];
+  }
+
   async uninstall(context: AdapterContext): Promise<InstallResult> {
     const commands = context.selectedAgents.flatMap(uninstallCommandsFor);
     const plan = this.basePlan({ mode: "off", features: {} }, context, commands, [
       "Marketplace/extension removals that lack a stable CLI remain manual.",
     ]);
     const base = await super.install(plan, context);
+    const errors = [...base.errors];
     if (!context.dryRun) {
-      if (context.selectedAgents.includes("opencode")) {
+      if (context.selectedAgents.includes("opencode") || context.selectedAgents.length === 0) {
         const config = getAgentPaths("opencode", context)[0];
-        if (config) await updateJson(config, (value) => ({ ...value, plugin: Array.isArray(value.plugin) ? value.plugin.filter((item) => item !== "@dietrichgebert/ponytail") : [] }));
+        if (config) {
+          try {
+            await updateJson(config, (value) => ({
+              ...value,
+              plugin: Array.isArray(value.plugin) ? value.plugin.filter((item) => item !== "@dietrichgebert/ponytail") : [],
+            }));
+          } catch (error) {
+            errors.push(`OpenCode cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
       }
-      try { await rm(ponytailConfigPath(context), { force: true }); } catch { /* ignore */ }
-      try { await rm(path.join(context.home, ".claude", ".ponytail-active"), { force: true }); } catch { /* ignore */ }
+      const configFile = ponytailConfigPath(context);
+      try {
+        const raw = await readFile(configFile, "utf8");
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (parsed[OWNED_MARKER] === true) {
+          // File was created/owned by Don’t Waste — safe to remove entirely.
+          await rm(configFile, { force: true });
+        } else {
+          // Preserve user-managed keys; only drop fields we wrote.
+          const { defaultMode: _drop, [OWNED_MARKER]: _owned, ...rest } = parsed;
+          if (Object.keys(rest).length === 0) await rm(configFile, { force: true });
+          else await writeFile(configFile, `${JSON.stringify(rest, null, 2)}\n`, "utf8");
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          errors.push(`Ponytail config cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      try { await rm(ponytailActivePath(context), { force: true }); }
+      catch (error) { errors.push(`Marker cleanup failed: ${error instanceof Error ? error.message : String(error)}`); }
     }
     const manual = context.selectedAgents.filter((agent) => !uninstallCommandsFor(agent).length && agent !== "opencode");
     return {
-      ...base,
+      succeeded: errors.length === 0 && base.succeeded,
+      executed: base.executed,
+      skipped: base.skipped,
       errors: [
-        ...base.errors,
+        ...errors,
         ...manual.map((agent) => `${agent}: remove Ponytail via that agent’s plugin/extension manager if still present`),
       ],
     };
