@@ -29,6 +29,41 @@ export function resolveCavemanMode(mode: Mode): string {
   return mode;
 }
 
+const OWNED_MARKER = "dont-waste-owned";
+
+export function cavemanConfigPath(
+  context: Pick<AdapterContext, "platform" | "home">,
+): string {
+  return context.platform === "win32"
+    ? path.join(
+        process.env.APPDATA ?? path.join(context.home, "AppData", "Roaming"),
+        "caveman",
+        "config.json",
+      )
+    : path.join(context.home, ".config", "caveman", "config.json");
+}
+
+async function updateJson(
+  file: string,
+  transform: (value: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> {
+  let current: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+      current = parsed as Record<string, unknown>;
+    else throw new Error("configuration root is not an object");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    `${JSON.stringify(transform(current), null, 2)}\n`,
+    "utf8",
+  );
+}
+
 /** Marker files Don’t Waste owns. Never invent a default agent when none are selected (install-only). */
 export function cavemanActivePaths(
   context: Pick<AdapterContext, "home" | "platform" | "selectedAgents">,
@@ -80,7 +115,16 @@ export class CavemanAdapter extends BaseAdapter {
         /* absent */
       }
     }
-    if (!markers.length) {
+    const configFile = cavemanConfigPath(context);
+    let configPresent = false;
+    try {
+      await access(configFile);
+      configPresent = true;
+    } catch {
+      /* absent */
+    }
+
+    if (!markers.length && !configPresent) {
       return {
         id: this.id,
         detected: false,
@@ -94,10 +138,10 @@ export class CavemanAdapter extends BaseAdapter {
     return {
       id: this.id,
       detected: true,
-      path: markers[0],
+      path: markers[0] ?? configFile,
       warnings: node
         ? []
-        : ["Caveman markers found but Node.js is absent from PATH"],
+        : ["Caveman markers/config found but Node.js is absent from PATH"],
     };
   }
 
@@ -110,6 +154,9 @@ export class CavemanAdapter extends BaseAdapter {
     );
     const mode = resolveCavemanMode(selection.mode);
     const affectedPaths = cavemanActivePaths(context);
+    if (context.selectedAgents.length) {
+      affectedPaths.push(cavemanConfigPath(context));
+    }
     const alreadyActive = (
       await Promise.all(
         affectedPaths.map(async (file) => {
@@ -145,6 +192,12 @@ export class CavemanAdapter extends BaseAdapter {
         selection.features.statusline
           ? "Statusline savings stay enabled (default Caveman behavior)."
           : "To silence the Claude Code savings badge later, set CAVEMAN_STATUSLINE_SAVINGS=0.",
+        selection.features.cavecrew
+          ? "Cavecrew subagents enabled (investigator, builder, reviewer)."
+          : "Cavecrew subagents disabled.",
+        selection.features.compress
+          ? "Caveman-compress enabled (compresses CLAUDE.md/notes)."
+          : "Caveman-compress disabled.",
         ...unsupported.map(
           (agent) => `${agent} has no Caveman --only target yet; skipped.`,
         ),
@@ -159,14 +212,26 @@ export class CavemanAdapter extends BaseAdapter {
   ): Promise<InstallResult> {
     const base = await super.install(plan, context);
     if (!base.succeeded || context.dryRun) return base;
-    // install-only passes empty selectedAgents — never write global/agent markers.
+    if (!context.selectedAgents.length) return base;
+
     const markers = cavemanActivePaths(context);
-    if (!markers.length) return base;
     const mode = resolveCavemanMode(plan.selection.mode);
     for (const file of markers) {
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, `${mode}\n`, "utf8");
     }
+
+    const configFile = cavemanConfigPath(context);
+    const cavecrew = plan.selection.features.cavecrew ?? false;
+    const compress = plan.selection.features.compress ?? false;
+    await updateJson(configFile, (value) => ({
+      ...value,
+      defaultMode: mode,
+      cavecrew,
+      compress,
+      [OWNED_MARKER]: true,
+    }));
+
     return base;
   }
 
@@ -223,6 +288,65 @@ export class CavemanAdapter extends BaseAdapter {
         });
       }
     }
+
+    const configFile = cavemanConfigPath(context);
+    try {
+      const config = JSON.parse(await readFile(configFile, "utf8")) as {
+        defaultMode?: unknown;
+        cavecrew?: unknown;
+        compress?: unknown;
+      };
+      checks.push(
+        config.defaultMode === expected
+          ? {
+              id: "caveman-default-mode",
+              status: "pass",
+              message: `Caveman defaultMode is ${expected}`,
+            }
+          : {
+              id: "caveman-default-mode",
+              status: "fail",
+              message: `Caveman defaultMode is ${String(config.defaultMode)}, expected ${expected}`,
+            },
+      );
+
+      const expectedCavecrew = selection.features.cavecrew ?? false;
+      checks.push(
+        config.cavecrew === expectedCavecrew
+          ? {
+              id: "caveman-cavecrew",
+              status: "pass",
+              message: `Caveman cavecrew is ${expectedCavecrew}`,
+            }
+          : {
+              id: "caveman-cavecrew",
+              status: "fail",
+              message: `Caveman cavecrew is ${String(config.cavecrew)}, expected ${expectedCavecrew}`,
+            },
+      );
+
+      const expectedCompress = selection.features.compress ?? false;
+      checks.push(
+        config.compress === expectedCompress
+          ? {
+              id: "caveman-compress",
+              status: "pass",
+              message: `Caveman compress is ${expectedCompress}`,
+            }
+          : {
+              id: "caveman-compress",
+              status: "fail",
+              message: `Caveman compress is ${String(config.compress)}, expected ${expectedCompress}`,
+            },
+      );
+    } catch {
+      checks.push({
+        id: "caveman-config",
+        status: "warn",
+        message: "Caveman config.json is not readable yet",
+      });
+    }
+
     return checks;
   }
 
@@ -254,7 +378,7 @@ export class CavemanAdapter extends BaseAdapter {
     const selected = context.selectedAgents.length
       ? cavemanActivePaths(context)
       : cavemanDetectPaths(context.home);
-    return selected;
+    return [...new Set([...selected, cavemanConfigPath(context)])];
   }
 
   async uninstall(context: AdapterContext): Promise<InstallResult> {
@@ -263,12 +387,46 @@ export class CavemanAdapter extends BaseAdapter {
     const errors: string[] = [];
     if (!context.dryRun) {
       for (const file of targets) {
-        try {
-          await rm(file, { force: true });
-        } catch (error) {
-          errors.push(
-            `Failed to remove ${file}: ${error instanceof Error ? error.message : String(error)}`,
-          );
+        if (file === cavemanConfigPath(context)) {
+          try {
+            const raw = await readFile(file, "utf8");
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            if (parsed[OWNED_MARKER] === true) {
+              // File was created/owned by Don’t Waste — safe to remove entirely.
+              await rm(file, { force: true });
+            } else {
+              // Preserve user-managed keys; only drop fields we wrote.
+              const {
+                defaultMode: _drop,
+                cavecrew: _cc,
+                compress: _cp,
+                [OWNED_MARKER]: _owned,
+                ...rest
+              } = parsed;
+              if (Object.keys(rest).length === 0)
+                await rm(file, { force: true });
+              else
+                await writeFile(
+                  file,
+                  `${JSON.stringify(rest, null, 2)}\n`,
+                  "utf8",
+                );
+            }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+              errors.push(
+                `Failed to clean up Caveman config: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+        } else {
+          try {
+            await rm(file, { force: true });
+          } catch (error) {
+            errors.push(
+              `Failed to remove ${file}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         }
       }
     }
@@ -279,7 +437,7 @@ export class CavemanAdapter extends BaseAdapter {
         ? targets.map((file) => ({
             command: "rm",
             args: [file],
-            label: `Remove Caveman marker ${file}`,
+            label: `Remove Caveman marker/config ${file}`,
           }))
         : [],
       errors,

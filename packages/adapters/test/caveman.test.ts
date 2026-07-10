@@ -29,7 +29,7 @@ describe("caveman adapter planning", () => {
     };
     const selection = {
       mode: "ultra" as const,
-      features: { statusline: false },
+      features: { statusline: false, cavecrew: true, compress: true },
     };
     const plan = await adapter.planInstall(selection, context);
     expect(plan.commands[0]?.command).toBe("npx");
@@ -65,9 +65,22 @@ describe("caveman adapter planning", () => {
       ),
     ).toBe("ultra\n");
 
+    const configPath = path.join(home, ".config", "caveman", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    expect(config.defaultMode).toBe("ultra");
+    expect(config.cavecrew).toBe(true);
+    expect(config.compress).toBe(true);
+    expect(config["dont-waste-owned"]).toBe(true);
+
     const checks = await adapter.verify(selection, live);
     expect(
       checks.filter((check) => check.status === "pass").length,
-    ).toBeGreaterThanOrEqual(2);
+    ).toBeGreaterThanOrEqual(5);
+
+    // Test uninstall
+    const uninstalled = await adapter.uninstall(live);
+    expect(uninstalled.succeeded).toBe(true);
+    // config.json should be removed since it was owned by don't waste
+    await expect(readFile(configPath, "utf8")).rejects.toThrow();
   });
 });

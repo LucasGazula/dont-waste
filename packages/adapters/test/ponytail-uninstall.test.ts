@@ -10,7 +10,13 @@ describe("ponytail uninstall", () => {
     const result = await adapter.uninstall({
       platform: "linux",
       home: await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-plan-")),
-      selectedAgents: ["claude-code", "codex", "gemini-cli"],
+      selectedAgents: [
+        "claude-code",
+        "codex",
+        "gemini-cli",
+        "copilot-cli",
+        "antigravity-cli",
+      ],
       dryRun: true,
     });
     expect(
@@ -22,6 +28,8 @@ describe("ponytail uninstall", () => {
         "claude plugin remove ponytail",
         "codex plugin remove ponytail",
         "gemini extensions uninstall ponytail",
+        "copilot plugin remove ponytail",
+        "agy plugin uninstall ponytail",
       ]),
     );
   });

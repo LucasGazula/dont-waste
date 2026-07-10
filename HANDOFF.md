@@ -23,55 +23,33 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 - Matriz declarativa de tools/agentes/modos.
 - `config.json`/`state.json`, snapshots/rollback, `DONT_WASTE_DATA_DIR`.
 - SQLite local (`node:sqlite`) com events/imports/operations/projects/sessions.
-- Fixtures sanitizadas RTK/Headroom/Caveman; importadores com measured/estimated/holdout/benchmark-reference.
-- Cursores de importação; upsert de projetos/sessões; atribuição project/agent/session/model/cost sem prompts/outputs.
-- Dedupe por `overlapKey`; Caveman stats só via `DONT_WASTE_CAVEMAN_STATS_FILE`.
+- Fixtures sanitizadas; importadores measured/estimated/holdout/benchmark-reference.
+- Dedupe por `overlapKey`; Caveman stats só via `DONT_WASTE_CAVEMAN_STATS_FILE` (sem prompts/outputs).
 
-### Adaptadores (parcialmente endurecidos)
+### Adaptadores
 
-- **RTK:** download oficial + SHA-256 + timeout de fetch; extração com busca recursiva do binário; flags `rtk init` oficiais por agente; verify binary+gain.
-- **Headroom:** install uv/pip; MCP merge idempotente (Codex/Claude/OpenCode); agentes sem MCP/wrap explicitados; collect com fallback perf → output-savings → stats.
-- **Caveman:** `--only` por agente; markers `.caveman-active`; detect por markers (não por Node); install-only não escreve markers; uninstall remove só markers.
-- **Ponytail:** persiste `defaultMode` + marker owned; detect por config/marker; install-only não escreve configs; uninstall preserva plugins/temas alheios.
+- **RTK / Headroom:** endurecidos (release SHA-256, MCP merge, fallbacks de collect).
+- **Caveman:** markers `.caveman-active`; config marker-owned; features **cavecrew** e **compress** no init/verify/uninstall (preserva chaves de usuário se config não for owned).
+- **Ponytail:** `defaultMode` + marker owned; uninstall com comandos para Codex/Claude/Pi/Gemini/**Copilot**/**Antigravity**; OpenCode via JSON merge.
 
-### CLI
+### CLI / Dashboard / TUI
 
-- Subcomandos: `menu`, `init`, `status`, `doctor`, `collect`, `dashboard`, `update`, `rollback`, `uninstall`.
-- Sem argumentos em TTY → menu TUI (Setup, Status, Doctor, Collect, Dashboard, Update, Uninstall, Exit).
-- `dashboard`: listen primeiro, imprime URL, collect em background.
-- Ativação de integração só com `shouldActivateIntegration` (sem warn/fail; sem interactive obrigatório pulado; nunca em install-only).
-- `doctor` e `/api/health` usam modos/features salvos (`configuredToolsFromConfig`); tools desabilitadas → skipped.
-- `uninstall`: snapshot de todos os `uninstallPaths`, remove marker-owned, restaura snapshot se falhar, limpa integrations só no sucesso.
-- `update`: compara versões instaladas vs GitHub, respeita `pinned`/`latest`, aplica só tools necessárias, preserva perfil/seleções/features.
+- Menu TUI; dashboard listen-first; plan summary por agente (paths, restart, compatibility, reversal).
+- SPA estruturada (Tools/Config/Diagnostics); filtros; agregação diária/semanal; Recharts lazy.
 
-### Dashboard
+## Verificações
 
-- API Fastify local + SPA React; overview/events/imports/projects/sessions/config/tools/health.
-- Overview: daily/weekly aggregation, costs, overlap groups, privacy contract.
-- `/api/events` filters: confidence, tool, project, session.
-- SPA: Tools/Configuration/Diagnostics as structured tables (no raw JSON); Timeline/Context filters; projects/sessions/costs; empty/error/overlap/privacy states.
-- Recharts loaded via `React.lazy` + dynamic `import()` (code-split).
-- GET `/` sem conflito com fastifyStatic quando SPA existe.
+- Rodar após integração residual: `pnpm lint`, `typecheck`, `test`, `build`, `git diff --check`, smoke CLI dry-run.
 
-### CLI TUI plan
+## Pendências reais
 
-- `formatPlanSummary`: tabela por agente com tools, paths, restart, compatibility, reversal e nota de controles avançados ainda não expostos.
+1. **Playwright** — sem infra no monorepo.
+2. **Docker daemon** — smoke script existe; validação real ainda indisponível neste WSL.
+3. **npm publish / site** `dont-waste.dev` — fora de escopo até release.
+4. Controles avançados ainda não no TUI: CCR/TTL, MCP-shrink, `learn --verbosity`.
 
-## Verificações recentes
-
-- `pnpm lint` / `typecheck` / `test` / `build` — reexecutar após esta fase.
-- Docker Desktop/WSL: daemon pode estar offline; script de smoke faz skip explícito.
-
-## Pendências restantes (próximas fases)
-
-1. **npm publish / site** `dont-waste.dev` (fora desta fase).
-2. **Validação Docker real** quando o daemon estiver acessível neste ambiente.
-3. **Fidelidade residual** — Caveman cavecrew/compress; Ponytail uninstall CLI para todos os hosts.
-4. **Playwright** — ainda sem infra no monorepo.
-
-## Regras para o próximo agente
+## Regras
 
 - Não rodar `init --yes` nem installers reais contra HOME do usuário.
-- Usar `HOME` + `DONT_WASTE_DATA_DIR` temporários nos testes.
-- Preservar subcomandos existentes.
-- Commits pequenos por fatia.
+- Usar `HOME` + `DONT_WASTE_DATA_DIR` temporários.
+- Preservar subcomandos; commits pequenos por fatia.

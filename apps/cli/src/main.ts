@@ -268,7 +268,22 @@ async function interactiveRequest(
             initialValue: false,
           }),
         );
-        selections[tool] = { mode, features: { statusline } };
+        const cavecrew = checked(
+          await confirm({
+            message: "Enable Cavecrew subagents?",
+            initialValue: false,
+          }),
+        );
+        const compress = checked(
+          await confirm({
+            message: "Enable Caveman-compress for memory/instructions?",
+            initialValue: false,
+          }),
+        );
+        selections[tool] = {
+          mode,
+          features: { statusline, cavecrew, compress },
+        };
       }
       if (tool === "ponytail") {
         const mode = checked(

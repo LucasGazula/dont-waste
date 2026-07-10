@@ -61,7 +61,7 @@ export function summarizePlanByAgent(input: PlanSummaryInput): AgentPlanRow[] {
         ],
         reversal: ["No agent configs written in install-only mode"],
         notes: [
-          "Advanced controls (CCR/TTL/cavecrew/MCP-shrink) are not exposed in this TUI yet",
+          "Advanced controls (CCR/TTL/MCP-shrink) are not exposed in this TUI yet",
         ],
       },
     ];
@@ -95,7 +95,7 @@ export function summarizePlanByAgent(input: PlanSummaryInput): AgentPlanRow[] {
       ...tools
         .map((tool) => restartHints[tool])
         .filter((item): item is string => Boolean(item)),
-      "Advanced controls not in this menu: CCR/TTL, cavecrew, MCP-shrink, learn --verbosity",
+      "Advanced controls not in this menu: CCR/TTL, MCP-shrink, learn --verbosity",
     ];
     return {
       agent,

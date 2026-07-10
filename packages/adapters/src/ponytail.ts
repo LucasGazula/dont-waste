@@ -140,6 +140,22 @@ function uninstallCommandsFor(agent: AgentId): Command[] {
         label: "Remove Ponytail Gemini extension",
       },
     ];
+  if (agent === "copilot-cli")
+    return [
+      {
+        command: "copilot",
+        args: ["plugin", "remove", "ponytail"],
+        label: "Remove Ponytail from Copilot CLI",
+      },
+    ];
+  if (agent === "antigravity-cli")
+    return [
+      {
+        command: "agy",
+        args: ["plugin", "uninstall", "ponytail"],
+        label: "Remove Ponytail Antigravity extension",
+      },
+    ];
   return [];
 }
 
