@@ -57,13 +57,20 @@ describe("distribution contracts", () => {
     }
   });
 
-  it("guards install scripts on Node 22+ without touching agent configs", () => {
+  it("guards local bootstrap installers on Node 22+ without npm publish or init", () => {
     const sh = readText("scripts/install.sh");
     const ps1 = readText("scripts/install.ps1");
     expect(sh).toContain("Node.js 22");
-    expect(sh).toContain("npm install --global dont-waste@latest");
+    expect(sh).toContain("--dry-run");
+    expect(sh).toContain("pnpm install");
+    expect(sh).toContain("pnpm build");
+    expect(sh).not.toContain("npm install --global");
+    expect(sh).not.toContain("dont-waste init @");
     expect(ps1).toContain("Node.js 22");
-    expect(ps1).toContain("npm install --global dont-waste@latest");
+    expect(ps1).toContain("DryRun");
+    expect(ps1).toContain("pnpm install");
+    expect(ps1).not.toContain("npm install --global");
+    expect(ps1).not.toContain("dont-waste init @args");
   });
 
   it("keeps Docker dashboard read-only over mounted local data", () => {

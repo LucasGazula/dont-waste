@@ -17,38 +17,62 @@ O que ele faz: planear, instalar/ativar (quando aplicável), validar, recolher m
 | Terminal interativo             | Menu TUI e confirmações de `init` / `uninstall` / `rollback`         |
 | (Opcional) ferramentas upstream | Headroom, RTK, Caveman, Ponytail — só se quiser ativá-las de verdade |
 
-**Distribuição npm global ainda é pendente.** Use o repositório (dev ou `dist` local). Scripts de bootstrap que falam em `npm install --global dont-waste@latest` pressupõem publish futuro; não são o caminho suportado hoje.
+**Distribuição npm global ainda é pendente.** Hoje o caminho suportado é o bootstrap a partir de um checkout local (abaixo). Um one-liner remoto (`curl | bash` / `irm | iex`) só será documentado quando existir URL Git pública ou pacote npm publicado.
+
+### Bootstrap local (comando curto)
+
+Pré-visualizar (não altera HOME/PATH/configs):
+
+```bash
+bash scripts/install.sh --dry-run
+```
+
+```powershell
+pwsh scripts/install.ps1 -DryRun
+```
+
+Instalar o comando `dont-waste` (Node ≥ 22, Corepack/pnpm, `pnpm install` + `pnpm build`, shim reversível):
+
+```bash
+bash scripts/install.sh
+# opcional: bash scripts/install.sh --prefix "$HOME/.local"
+```
+
+```powershell
+pwsh scripts/install.ps1
+# opcional: pwsh scripts/install.ps1 -Prefix "$env:LOCALAPPDATA\dont-waste"
+```
+
+Depois: garanta que `PREFIX/bin` está no `PATH`, corra `dont-waste --help`, e use `dont-waste` — a TUI **continua a pedir confirmação** antes de configurar adapters. Remover o shim: `bash scripts/install.sh --uninstall` / `pwsh scripts/install.ps1 -Uninstall`.
 
 ---
 
 ## Guias por sistema operativo (a partir do repositório)
 
-Em todos os casos: clone o repo, entre na pasta e use **Corepack + pnpm**. Os exemplos abaixo usam um diretório de dados temporário para não tocar no estado real do utilizador.
+Em todos os casos: clone o repo e entre na pasta. Preferência: o bootstrap acima. Alternativa manual: Corepack + pnpm. Os exemplos usam um diretório de dados temporário para não tocar no estado real do utilizador.
 
 ### Linux
 
 ```bash
 # Pré-requisitos: Node.js 22+ no PATH
 node -v
-corepack enable
-corepack prepare pnpm@10.16.1 --activate
 
 git clone <url-do-repositorio> dont_waste
 cd dont_waste
-pnpm install
-pnpm build
+bash scripts/install.sh --dry-run
+bash scripts/install.sh
 
 # Dados isolados (recomendado para exploração)
 export DONT_WASTE_DATA_DIR="$(mktemp -d)"
 export HOME="$(mktemp -d)"   # opcional: isola também deteção de configs de agentes
 
-pnpm --filter dont-waste dev -- --help
-pnpm --filter dont-waste dev -- status --dry-run
-pnpm --filter dont-waste dev -- doctor --dry-run
-pnpm --filter dont-waste dev -- init --dry-run
+dont-waste --help
+dont-waste status --dry-run
+dont-waste doctor --dry-run
+dont-waste init --dry-run
 ```
 
-Após `pnpm build`, o binário local é `apps/cli/dist/main.js` (`bin` do pacote `dont-waste`).
+Alternativa sem shim: `corepack enable && pnpm install && pnpm build`, depois `pnpm --filter dont-waste dev -- …` ou `node apps/cli/dist/main.js …`.
 
 Diretório de dados por omissão (sem `DONT_WASTE_DATA_DIR`):
 
@@ -59,21 +83,19 @@ Diretório de dados por omissão (sem `DONT_WASTE_DATA_DIR`):
 ```bash
 # Pré-requisitos: Node.js 22+ (Homebrew ou instalador oficial)
 node -v
-corepack enable
-corepack prepare pnpm@10.16.1 --activate
 
 git clone <url-do-repositorio> dont_waste
 cd dont_waste
-pnpm install
-pnpm build
+bash scripts/install.sh --dry-run
+bash scripts/install.sh
 
 export DONT_WASTE_DATA_DIR="$(mktemp -d)"
 export HOME="$(mktemp -d)"
 
-pnpm --filter dont-waste dev -- --help
-pnpm --filter dont-waste dev -- status --dry-run
-pnpm --filter dont-waste dev -- doctor --dry-run
-pnpm --filter dont-waste dev -- init --dry-run
+dont-waste --help
+dont-waste status --dry-run
+dont-waste doctor --dry-run
+dont-waste init --dry-run
 ```
 
 Diretório de dados por omissão: `~/Library/Application Support/dont-waste`.
@@ -83,35 +105,31 @@ Diretório de dados por omissão: `~/Library/Application Support/dont-waste`.
 ```powershell
 # Pré-requisitos: Node.js 22+ no PATH
 node -v
-corepack enable
-corepack prepare pnpm@10.16.1 --activate
 
 git clone <url-do-repositorio> dont_waste
 cd dont_waste
-pnpm install
-pnpm build
+pwsh scripts/install.ps1 -DryRun
+pwsh scripts/install.ps1
 
 $env:DONT_WASTE_DATA_DIR = Join-Path $env:TEMP ("dont-waste-data-" + [guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $env:DONT_WASTE_DATA_DIR | Out-Null
-# Opcional: HOME/USERPROFILE temporários se quiser isolar deteção de agentes
-$env:HOME = Join-Path $env:TEMP ("dont-waste-home-" + [guid]::NewGuid().ToString())
-New-Item -ItemType Directory -Path $env:HOME | Out-Null
 
-pnpm --filter dont-waste dev -- --help
-pnpm --filter dont-waste dev -- status --dry-run
-pnpm --filter dont-waste dev -- doctor --dry-run
-pnpm --filter dont-waste dev -- init --dry-run
+dont-waste --help
+dont-waste status --dry-run
+dont-waste doctor --dry-run
+dont-waste init --dry-run
 ```
 
 Diretório de dados por omissão: `%APPDATA%\dont-waste`.
 
 ### Uso do repositório vs npm global
 
-| Caminho                                          | Quando usar                          |
-| ------------------------------------------------ | ------------------------------------ |
-| `pnpm --filter dont-waste dev -- …`              | Desenvolvimento / documentação (tsx) |
-| `node apps/cli/dist/main.js …` após `pnpm build` | Binário local do workspace           |
-| `npm install -g dont-waste`                      | **Ainda não** — publish pendente     |
+| Caminho                                                | Quando usar                      |
+| ------------------------------------------------------ | -------------------------------- |
+| `bash scripts/install.sh` / `pwsh scripts/install.ps1` | Bootstrap local suportado hoje   |
+| `pnpm --filter dont-waste dev -- …`                    | Desenvolvimento sem shim         |
+| `node apps/cli/dist/main.js …` após `pnpm build`       | Binário local do workspace       |
+| `npm install -g dont-waste`                            | **Ainda não** — publish pendente |
 
 ---
 
@@ -120,16 +138,17 @@ Diretório de dados por omissão: `%APPDATA%\dont-waste`.
 Comece **sempre** por comandos de leitura / dry-run. Não use `init --yes` nem installers reais contra o seu `HOME` até ter revisto o plano.
 
 ```bash
-# Linux / macOS — dados temporários
+# Linux / macOS — bootstrap preview + dados temporários
+bash scripts/install.sh --dry-run
 export DONT_WASTE_DATA_DIR="$(mktemp -d)"
 
-pnpm --filter dont-waste dev -- --help
-pnpm --filter dont-waste dev -- status
-pnpm --filter dont-waste dev -- doctor
-pnpm --filter dont-waste dev -- init --dry-run
-pnpm --filter dont-waste dev -- collect --dry-run
-pnpm --filter dont-waste dev -- update --dry-run
-pnpm --filter dont-waste dev -- uninstall --dry-run
+dont-waste --help          # após bootstrap; ou: pnpm --filter dont-waste dev -- --help
+dont-waste status
+dont-waste doctor
+dont-waste init --dry-run
+dont-waste collect --dry-run
+dont-waste update --dry-run
+dont-waste uninstall --dry-run
 ```
 
 PowerShell (equivalente):

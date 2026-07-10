@@ -19,6 +19,7 @@ Documentação de utilizador: [`README.md`](README.md). Comparação com upstrea
 - Contratos de distribuição cobertos por testes (`bin`/`files`/`exports`, shebang tsup, install scripts Node 22+, Docker read-only data).
 - CI matriz Ubuntu/macOS/Windows: lint (Prettier) → typecheck → test → build → smoke CLI não destrutivo.
 - Docker: `docker/Dockerfile` + `compose.yaml`; `scripts/docker-smoke.sh` (skip se daemon ausente).
+- Bootstrap local: `scripts/install.sh` / `scripts/install.ps1` (`--dry-run` / `-DryRun`, shim reversível em PREFIX; sem init/agentes; sem npm publish).
 
 ### Catálogo, core, telemetria
 
