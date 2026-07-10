@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { access, mkdtemp } from "node:fs/promises";
+import { access, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { installRtkFromOfficialRelease, parseChecksumLine, resolveRtkTarget, sha256 } from "../src/rtk-release.js";
+import { findExtractedBinary, installRtkFromOfficialRelease, parseChecksumLine, resolveRtkTarget, sha256 } from "../src/rtk-release.js";
+import { rtkInitArgs } from "../src/rtk.js";
 
 function tarOfSingleFile(name: string, content: string): Buffer {
   const data = Buffer.from(content, "utf8");
@@ -33,6 +34,21 @@ describe("rtk official release install", () => {
     expect(resolveRtkTarget("win32", "x64").asset).toBe("rtk-x86_64-pc-windows-msvc.zip");
     expect(parseChecksumLine("abc123def4567890abc123def4567890abc123def4567890abc123def4567890  rtk-x86_64-unknown-linux-musl.tar.gz\n", "rtk-x86_64-unknown-linux-musl.tar.gz"))
       .toBe("abc123def4567890abc123def4567890abc123def4567890abc123def4567890");
+  });
+
+  it("uses official init flags per agent", () => {
+    expect(rtkInitArgs("codex")).toEqual(["init", "-g", "--codex"]);
+    expect(rtkInitArgs("opencode")).toEqual(["init", "-g", "--opencode"]);
+    expect(rtkInitArgs("antigravity-cli")).toEqual(["init", "--agent", "antigravity"]);
+    expect(rtkInitArgs("pi")).toEqual(["init", "-g", "--agent", "pi"]);
+    expect(rtkInitArgs("copilot-cli")).toEqual(["init", "-g", "--copilot"]);
+  });
+
+  it("finds nested extracted binaries", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dont-waste-rtk-find-"));
+    await mkdir(path.join(root, "nested"), { recursive: true });
+    await writeFile(path.join(root, "nested", "rtk"), "#!/bin/sh\n", "utf8");
+    expect(await findExtractedBinary(root, "rtk")).toBe(path.join(root, "nested", "rtk"));
   });
 
   it("refuses checksum mismatches and installs when the digest matches", async () => {

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execa } from "execa";
 
 const REPO = "rtk-ai/rtk";
+const FETCH_TIMEOUT_MS = 30_000;
 
 export type RtkTarget = {
   asset: string;
@@ -33,14 +34,49 @@ export function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+async function fetchWithTimeout(url: string, fetchImpl: typeof fetch, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Timed out after ${FETCH_TIMEOUT_MS}ms fetching ${url}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchLatestRtkTag(fetchImpl: typeof fetch = fetch): Promise<string> {
-  const response = await fetchImpl(`https://api.github.com/repos/${REPO}/releases/latest`, {
+  const response = await fetchWithTimeout(`https://api.github.com/repos/${REPO}/releases/latest`, fetchImpl, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "dont-waste" },
   });
   if (!response.ok) throw new Error(`GitHub releases/latest failed: ${response.status}`);
   const body = await response.json() as { tag_name?: unknown };
   if (typeof body.tag_name !== "string" || !body.tag_name) throw new Error("GitHub release response missing tag_name");
   return body.tag_name;
+}
+
+/** Walk the extract tree for the RTK binary (archives may nest the file). */
+export async function findExtractedBinary(root: string, binaryName: string): Promise<string> {
+  const direct = path.join(root, binaryName);
+  try {
+    await readFile(direct);
+    return direct;
+  } catch { /* search recursively */ }
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop()!;
+    const entries = await readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (entry.name === binaryName) return full;
+    }
+  }
+  throw new Error(`Extracted archive did not contain ${binaryName}`);
 }
 
 export type InstallRtkOptions = {
@@ -77,8 +113,8 @@ export async function installRtkFromOfficialRelease(options: InstallRtkOptions =
   }
 
   const [archiveResponse, checksumsResponse] = await Promise.all([
-    fetchImpl(archiveUrl, { headers: { "User-Agent": "dont-waste" } }),
-    fetchImpl(checksumsUrl, { headers: { "User-Agent": "dont-waste" } }),
+    fetchWithTimeout(archiveUrl, fetchImpl, { headers: { "User-Agent": "dont-waste" } }),
+    fetchWithTimeout(checksumsUrl, fetchImpl, { headers: { "User-Agent": "dont-waste" } }),
   ]);
   if (!archiveResponse.ok) throw new Error(`Failed to download ${archiveUrl}: ${archiveResponse.status}`);
   if (!checksumsResponse.ok) throw new Error(`Failed to download checksums.txt — refusing to install unverified binary (${checksumsResponse.status})`);
@@ -95,12 +131,22 @@ export async function installRtkFromOfficialRelease(options: InstallRtkOptions =
     const archivePath = path.join(tempDir, target.asset);
     await writeFile(archivePath, archive);
     if (target.archiveKind === "tar.gz") {
-      await execa("tar", ["-xzf", archivePath, "-C", tempDir], { reject: true });
+      await execa("tar", ["-xzf", archivePath, "-C", tempDir], { reject: true, timeout: 60_000, forceKillAfterDelay: 5_000 });
+    } else if (platform === "win32") {
+      // Prefer tar (available on modern Windows); fall back to PowerShell Expand-Archive.
+      try {
+        await execa("tar", ["-xf", archivePath, "-C", tempDir], { reject: true, timeout: 60_000, forceKillAfterDelay: 5_000 });
+      } catch {
+        await execa("powershell", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${archivePath.replaceAll("'", "''")}' -DestinationPath '${tempDir.replaceAll("'", "''")}' -Force`], {
+          reject: true,
+          timeout: 60_000,
+          forceKillAfterDelay: 5_000,
+        });
+      }
     } else {
-      await execa("tar", ["-xf", archivePath, "-C", tempDir], { reject: true });
+      await execa("unzip", ["-o", archivePath, "-d", tempDir], { reject: true, timeout: 60_000, forceKillAfterDelay: 5_000 });
     }
-    const extracted = path.join(tempDir, platform === "win32" ? "rtk.exe" : "rtk");
-    await readFile(extracted);
+    const extracted = await findExtractedBinary(tempDir, binaryName);
     await mkdir(installDir, { recursive: true });
     await rename(extracted, binaryPath);
     if (platform !== "win32") await chmod(binaryPath, 0o755);

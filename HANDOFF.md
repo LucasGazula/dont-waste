@@ -21,10 +21,10 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 - SQLite local (`node:sqlite`) com events/imports/operations; dedupe por `overlapKey`; Caveman stats só via `DONT_WASTE_CAVEMAN_STATS_FILE`.
 
 ### Adaptadores (parcialmente endurecidos)
-- **RTK:** download de release oficial GitHub + SHA-256; `rtk init` por agente; sem uninstall genérico estável.
-- **Headroom:** install uv/pip; MCP merge idempotente (Codex markers / Claude / OpenCode) sem sobrescrever mismatch; wrap marcado `interactive` + `optional`.
+- **RTK:** download oficial + SHA-256 + timeout de fetch; extração com busca recursiva do binário; flags `rtk init` oficiais por agente; verify binary+gain.
+- **Headroom:** install uv/pip; MCP merge idempotente (Codex/Claude/OpenCode); agentes sem MCP/wrap explicitados; collect com fallback perf → output-savings → stats.
 - **Caveman:** `--only` por agente; markers `.caveman-active`; detect por markers (não por Node); install-only não escreve markers; uninstall remove só markers.
-- **Ponytail:** persiste `defaultMode` + marker owned; detect por config/marker; install-only não escreve configs; uninstall preserva plugins/temas alheios e só remove owned.
+- **Ponytail:** persiste `defaultMode` + marker owned; detect por config/marker; install-only não escreve configs; uninstall preserva plugins/temas alheios.
 
 ### CLI
 - Subcomandos: `menu`, `init`, `status`, `doctor`, `collect`, `dashboard`, `update`, `rollback`, `uninstall`.
@@ -33,6 +33,7 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 - Ativação de integração só com `shouldActivateIntegration` (sem warn/fail; sem interactive obrigatório pulado; nunca em install-only).
 - `doctor` e `/api/health` usam modos/features salvos (`configuredToolsFromConfig`); tools desabilitadas → skipped.
 - `uninstall`: snapshot de todos os `uninstallPaths`, remove marker-owned, restaura snapshot se falhar, limpa integrations só no sucesso.
+- `update`: compara versões instaladas vs GitHub, respeita `pinned`/`latest`, aplica só tools necessárias, preserva perfil/seleções/features.
 
 ### Dashboard
 - API Fastify local + SPA React; overview/events/imports/config/tools/health.
@@ -44,11 +45,10 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 
 ## Pendências restantes (próximas fases)
 
-1. **Adaptadores / fidelidade upstream** — confirmar docs oficiais; Headroom wrap vs MCP na UX de status; RTK verify mais forte; Caveman cavecrew/compress; Ponytail uninstall CLI para todos os hosts.
-2. **Update** — comparar versões instaladas vs GitHub; changelog; política `latest`.
-3. **Métricas** — fixtures reais RTK/Headroom; fallback `headroom perf`; output-savings; projetos/sessões/cursors.
-4. **Dashboard/TUI** — páginas Tools/Config/Diagnostics sem JSON cru; filtros; code-split Recharts; TUI avançada (CCR/TTL/etc.).
-5. **Docker/CI/publish** — smoke Docker; smoke CLI na CI; npm publish / site.
+1. **Métricas** — fixtures reais RTK/Headroom; projetos/sessões/cursors completos.
+2. **Dashboard/TUI** — páginas Tools/Config/Diagnostics sem JSON cru; filtros; code-split Recharts; TUI avançada.
+3. **Docker/CI/publish** — smoke Docker; smoke CLI na CI; npm publish / site.
+4. **Fidelidade residual** — Caveman cavecrew/compress; Ponytail uninstall CLI para todos os hosts; Playwright.
 
 ## Regras para o próximo agente
 - Não rodar `init --yes` nem installers reais contra HOME do usuário.

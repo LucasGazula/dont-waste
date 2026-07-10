@@ -51,7 +51,9 @@ export function importHeadroomJson(raw: string, now = new Date()): MetricEvent[]
     const saved = firstNumber(record, ["tokens_saved", "saved_tokens", "savings"]);
     if (before === null && after === null && saved === null) return [];
     const output = Boolean(record.output || record.metric_type === "output" || record.type === "output-savings");
-    const confidence = record.measured === true || record.confidence === "measured" ? "measured" : output ? "estimated" : "measured";
+    const confidence = record.measured === true || record.holdout === true || record.confidence === "measured"
+      ? "measured"
+      : output ? "estimated" : "measured";
     const effectiveBefore = before ?? (after !== null && saved !== null ? after + saved : null);
     const effectiveAfter = after ?? (before !== null && saved !== null ? before - saved : null);
     return [{

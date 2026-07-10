@@ -3,13 +3,14 @@ import process from "node:process";
 import { cancel, confirm, intro, isCancel, multiselect, note, outro, select, spinner } from "@clack/prompts";
 import { createAdapters, detectAgents, configuredToolsFromConfig, shouldActivateIntegration, type AdapterContext, type InstallResult, type OperationPlan, type ToolSelection } from "@dont-waste/adapters";
 import { agents, balancedSelection, toolIds, type AgentId, type Mode, type ToolId } from "@dont-waste/catalog";
-import { createOperation, getDataPaths, readConfig, restoreOperation, setIntegration, updateOperation, writeConfig } from "@dont-waste/core";
+import { createOperation, getDataPaths, readConfig, restoreOperation, setIntegration, updateOperation, writeConfig, type DontWasteConfig } from "@dont-waste/core";
 import { createDashboardServer } from "@dont-waste/dashboard-api";
 import { TelemetryStore, aggregateEvents } from "@dont-waste/telemetry";
 import { Command } from "commander";
 import { execa } from "execa";
 import { browserOpenCommand, formatDashboardReady, resolveDashboardStaticDir } from "./dashboard-launch.js";
 import { mainMenuOptions, shouldOpenMainMenu, type MenuAction } from "./menu.js";
+import { compareUpdates, toolsNeedingUpdate, type ReleaseInfo } from "./updates.js";
 
 type CommonOptions = { dryRun?: boolean; json?: boolean; yes?: boolean };
 type InitOptions = CommonOptions & { profile?: Profile; channel?: "pinned" | "latest" };
@@ -20,6 +21,8 @@ type PlanResult = { request: InitRequest; plans: OperationPlan[]; diagnostics: A
 
 const packageVersion = "0.1.0";
 const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+/** Caveman/Ponytail detect markers/config; their Node banners are not upstream releases. */
+const nodeBackedTools = new Set<ToolId>(["caveman", "ponytail"]);
 
 function context(selectedAgents: AgentId[], dryRun: boolean): AdapterContext {
   return { platform: process.platform, home, selectedAgents, dryRun };
@@ -46,6 +49,21 @@ function defaultSelections(profile: Profile): Record<ToolId, ToolSelection> {
   if (profile === "maximum-savings") modes.caveman = "ultra";
   if (profile === "install-only") return Object.fromEntries(toolIds.map((tool) => [tool, { mode: "full", features: {} }])) as Record<ToolId, ToolSelection>;
   return Object.fromEntries(toolIds.map((tool) => [tool, { mode: modes[tool], features: tool === "headroom" ? { outputShaper: profile === "maximum-savings" } : tool === "rtk" ? { ultraCompact: profile === "maximum-savings" } : {} }])) as Record<ToolId, ToolSelection>;
+}
+
+/** Preserve custom modes/features already saved in config when planning updates. */
+function selectionsFromConfig(config: DontWasteConfig): Record<ToolId, ToolSelection> {
+  const selections = defaultSelections(config.profile);
+  for (const tools of Object.values(config.integrations)) {
+    if (!tools) continue;
+    for (const tool of toolIds) {
+      const settings = tools[tool];
+      if (settings?.enabled && settings.mode !== "off") {
+        selections[tool] = { mode: settings.mode, features: settings.features ?? {} };
+      }
+    }
+  }
+  return selections;
 }
 
 async function interactiveRequest(options: InitOptions, diagnostics: Awaited<ReturnType<typeof detectAgents>>): Promise<InitRequest> {
@@ -159,7 +177,9 @@ async function applyPlan(plan: PlanResult, operationType: "init" | "update", opt
           telemetry.recordIntegration(agent, item.tool, selected.features, item.checks.some((check) => check.status === "fail") || !installed.succeeded ? "failed" : "pending", operation.id);
         }
       }
-      telemetry.recordInstallation(item.tool, plan.diagnostics.find((entry) => entry.id === item.tool)?.version, plan.request.channel, activate ? "succeeded" : "failed");
+      const detection = await adapters[item.tool].detect(context(plan.request.selectedAgents, false));
+      const version = nodeBackedTools.has(item.tool) ? undefined : detection.version;
+      telemetry.recordInstallation(item.tool, version, plan.request.channel, activate ? "succeeded" : "failed");
     }
     telemetry.recordOperation(operation.id, operationType, plan, "succeeded", operation.snapshotFile);
     telemetry.close();
@@ -190,19 +210,97 @@ async function collect(paths = getDataPaths()): Promise<{ imports: Array<{ sourc
   return { imports, summary };
 }
 
-async function officialUpdates(): Promise<Array<{ tool: ToolId; version?: string | undefined; url: string; error?: string | undefined }>> {
+async function officialUpdates(): Promise<ReleaseInfo[]> {
   const repositories: Record<ToolId, string> = {
     headroom: "headroomlabs-ai/headroom", rtk: "rtk-ai/rtk", caveman: "JuliusBrussee/caveman", ponytail: "DietrichGebert/ponytail",
   };
   return Promise.all(toolIds.map(async (tool) => {
     const url = `https://github.com/${repositories[tool]}/releases/latest`;
     try {
-      const response = await fetch(`https://api.github.com/repos/${repositories[tool]}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } });
+      const response = await fetch(`https://api.github.com/repos/${repositories[tool]}/releases/latest`, {
+        headers: { Accept: "application/vnd.github+json", "User-Agent": "dont-waste" },
+      });
       if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
       const body = await response.json() as { tag_name?: string; html_url?: string };
-      return { tool, version: body.tag_name, url: body.html_url ?? url };
+      return { tool, latest: body.tag_name, url: body.html_url ?? url };
     } catch (error) { return { tool, url, error: error instanceof Error ? error.message : String(error) }; }
   }));
+}
+
+async function installedToolVersions(): Promise<Array<{ tool: ToolId; installed?: string | undefined; detected: boolean }>> {
+  const adapters = createAdapters();
+  const paths = getDataPaths();
+  const store = await TelemetryStore.open(paths);
+  const result = await Promise.all(toolIds.map(async (tool) => {
+    const detection = await adapters[tool].detect(context([], true));
+    const recorded = store.latestInstallation(tool)?.version ?? undefined;
+    const installed = nodeBackedTools.has(tool) ? recorded : (detection.version ?? recorded);
+    return { tool, installed, detected: detection.detected };
+  }));
+  store.close();
+  return result;
+}
+
+async function makeUpdatePlan(options: CommonOptions, config: DontWasteConfig, onlyTools: ToolId[]): Promise<PlanResult> {
+  const selectedAgents = Object.keys(config.integrations) as AgentId[];
+  const selections = selectionsFromConfig(config);
+  const diagnostics = await detectAgents(context([], Boolean(options.dryRun)));
+  const adapters = createAdapters();
+  const plans: OperationPlan[] = [];
+  for (const tool of onlyTools) {
+    const selection = selections[tool];
+    if (!selection || selection.mode === "off") continue;
+    plans.push(await adapters[tool].planInstall(
+      selection,
+      context(config.profile === "install-only" ? [] : selectedAgents, Boolean(options.dryRun)),
+    ));
+  }
+  return {
+    request: {
+      profile: config.profile,
+      channel: config.updateChannel,
+      selectedAgents,
+      selections,
+    },
+    plans,
+    diagnostics,
+  };
+}
+
+async function runUpdate(options: CommonOptions): Promise<void> {
+  const [releases, installed] = await Promise.all([officialUpdates(), installedToolVersions()]);
+  const comparisons = compareUpdates(installed, releases);
+  const needing = toolsNeedingUpdate(comparisons);
+  const config = await readConfig(getDataPaths());
+  if (!options.yes || options.dryRun) {
+    return result({
+      dontWaste: packageVersion,
+      updateChannel: config.updateChannel,
+      comparisons,
+      needingUpdate: needing,
+      next: config.updateChannel === "pinned"
+        ? "Channel is pinned: review release URLs above; switch updateChannel to latest before applying with --yes."
+        : needing.length
+          ? "Review release notes for tools marked update-available/not-installed; rerun with --yes to apply an idempotent plan only for those tools."
+          : "All detected tools look up to date with the latest GitHub releases.",
+    }, options);
+  }
+  requireConfirmation(options);
+  if (config.updateChannel === "pinned") {
+    return result({
+      dontWaste: packageVersion,
+      updateChannel: "pinned",
+      comparisons,
+      applied: false,
+      reason: "Refusing to apply updates while updateChannel is pinned.",
+    }, options);
+  }
+  if (!needing.length) {
+    return result({ dontWaste: packageVersion, comparisons, applied: false, reason: "nothing to update" }, options);
+  }
+  const setup = await makeUpdatePlan(options, config, needing);
+  if (!options.json) note(planText(setup), "Update plan (tools needing changes only)");
+  result({ comparisons, needingUpdate: needing, ...(await applyPlan(setup, "update", options)) }, options);
 }
 
 function addCommonOptions(command: Command): Command {
@@ -294,15 +392,6 @@ async function runDashboard(options: DashboardOptions): Promise<void> {
   const close = async () => { await dashboard.close(); process.exit(0); };
   process.once("SIGINT", () => void close()); process.once("SIGTERM", () => void close());
   await new Promise<void>(() => undefined);
-}
-
-async function runUpdate(options: CommonOptions): Promise<void> {
-  const updates = await officialUpdates();
-  if (!options.yes || options.dryRun) return result({ dontWaste: packageVersion, updates, next: "Review release notes; rerun with --yes to apply the validated integration plan." }, options);
-  requireConfirmation(options);
-  const config = await readConfig(getDataPaths());
-  const setup = await makePlan({ ...options, profile: config.profile, channel: config.updateChannel });
-  result({ updates, ...(await applyPlan(setup, "update", options)) }, options);
 }
 
 async function runRollback(id: string, options: CommonOptions): Promise<void> {
@@ -449,5 +538,6 @@ main().catch((error: unknown) => {
 });
 
 export { collect, makePlan, runMainMenu };
+export { compareUpdates, normalizeVersion, toolsNeedingUpdate } from "./updates.js";
 export { mainMenuOptions, shouldOpenMainMenu } from "./menu.js";
 export { browserOpenCommand, formatDashboardReady, resolveDashboardStaticDir } from "./dashboard-launch.js";

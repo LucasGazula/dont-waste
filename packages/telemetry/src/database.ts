@@ -111,6 +111,18 @@ export class TelemetryStore {
     );
   }
 
+  latestInstallation(tool: string): { tool: string; version: string | null; channel: string; installedAt: string; result: string } | undefined {
+    const row = this.database.prepare(`SELECT tool, version, channel, installed_at, result FROM installations WHERE tool = ? AND result = 'succeeded' ORDER BY installed_at DESC LIMIT 1`).get(tool) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return {
+      tool: String(row.tool),
+      version: (row.version as string | null) ?? null,
+      channel: String(row.channel),
+      installedAt: String(row.installed_at),
+      result: String(row.result),
+    };
+  }
+
   recordAgent(agent: string, configPath: string | undefined, version: string | undefined): void {
     this.database.prepare(`INSERT INTO agents (id, agent, config_path, version, detected_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(agent) DO UPDATE SET config_path = excluded.config_path, version = excluded.version, detected_at = excluded.detected_at`).run(
       crypto.randomUUID(), agent, configPath ?? null, version ?? null, new Date().toISOString(),

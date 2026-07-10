@@ -32,9 +32,13 @@ export class HeadroomAdapter extends BaseAdapter {
       ...context.selectedAgents.flatMap((agent) => getAgentPaths(agent, context)),
       ...context.selectedAgents.map((agent) => mcpConfigPath(agent, context)).filter((file): file is string => Boolean(file)),
     ];
+    const unsupportedMcp = context.selectedAgents.filter((agent) => !mcpAgents.includes(agent) && !wrapName[agent]);
+    const wrapOnly = context.selectedAgents.filter((agent) => wrapName[agent] && !mcpAgents.includes(agent));
     return this.basePlan(selection, context, commands, [
       "Headroom wrap starts an interactive agent session and is intentionally not launched by the installer.",
       "Headroom MCP (stdio: `headroom mcp serve`) is merged into Codex/Claude/OpenCode configs when absent; existing mismatched entries are never replaced.",
+      ...unsupportedMcp.map((agent) => `${agent}: no Headroom wrap wrapper or structured MCP registrar yet; skipped.`),
+      ...wrapOnly.map((agent) => `${agent}: Headroom wrap is available; structured MCP registration is not supported for this agent yet.`),
       selection.features.outputShaper ? "HEADROOM_OUTPUT_SHAPER saves output through a counterfactual estimate unless a holdout is configured." : "",
     ].filter(Boolean), [...new Set(affectedPaths)]);
   }
@@ -89,11 +93,28 @@ export class HeadroomAdapter extends BaseAdapter {
   }
 
   async collectMetrics(): Promise<MetricImportResult> {
-    try {
-      const result = await execa("headroom", ["perf", "--format", "json"], { reject: false, timeout: 15_000 });
-      if (result.exitCode !== 0) return { source: "headroom perf", events: [], error: result.stderr || "headroom perf failed" };
-      return { source: "headroom perf", events: importHeadroomJson(result.stdout) };
-    } catch (error) { return { source: "headroom perf", events: [], error: error instanceof Error ? error.message : String(error) }; }
+    const attempts: Array<{ source: string; args: string[] }> = [
+      { source: "headroom perf", args: ["perf", "--format", "json"] },
+      { source: "headroom output-savings", args: ["output-savings", "--format", "json"] },
+      { source: "headroom stats", args: ["stats", "--format", "json"] },
+    ];
+    const errors: string[] = [];
+    for (const attempt of attempts) {
+      try {
+        const result = await execa("headroom", attempt.args, { reject: false, timeout: 15_000, forceKillAfterDelay: 5_000 });
+        if (result.exitCode === 0 && result.stdout.trim()) {
+          return { source: attempt.source, events: importHeadroomJson(result.stdout) };
+        }
+        errors.push(`${attempt.source}: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`);
+      } catch (error) {
+        errors.push(`${attempt.source}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return {
+      source: "headroom metrics",
+      events: [],
+      error: `No Headroom metrics command succeeded (${errors.join(" | ")}). Upstream may not expose perf JSON in this version.`,
+    };
   }
 
   async uninstallPaths(context: AdapterContext): Promise<string[]> {
