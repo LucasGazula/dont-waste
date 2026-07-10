@@ -17,6 +17,7 @@ export type MetricEvent = {
   projectPath?: string | undefined;
   agentId?: string | undefined;
   sessionId?: string | undefined;
+  model?: string | undefined;
   evidence?: string | undefined;
   costBefore?: number | undefined;
   costAfter?: number | undefined;
@@ -60,14 +61,16 @@ export function selectNonOverlappingMeasured(events: MetricEvent[]): MetricEvent
 }
 
 export function aggregateEvents(events: MetricEvent[]): MetricSummary {
-  const selected = selectNonOverlappingMeasured(events);
+  // Benchmark-reference events are informational and never enter measured/estimated totals.
+  const countable = events.filter((event) => event.metricType !== "benchmark-reference" && event.confidence !== "unavailable");
+  const selected = selectNonOverlappingMeasured(countable);
   const measuredSaved = selected.reduce((total, event) => total + eventSavings(event), 0);
-  const estimated = events.filter((event) => event.confidence === "estimated");
+  const estimated = countable.filter((event) => event.confidence === "estimated");
   const estimatedSaved = estimated.reduce((total, event) => total + eventSavings(event), 0);
   const before = selected.reduce((total, event) => total + (event.tokensBefore ?? 0), 0);
   const after = selected.reduce((total, event) => total + (event.tokensAfter ?? 0), 0);
   const tools: MetricSummary["tools"] = {};
-  for (const event of events) {
+  for (const event of countable) {
     const current = tools[event.tool] ?? { measuredSaved: 0, estimatedSaved: 0, events: 0 };
     current.events += 1;
     if (event.confidence === "estimated") current.estimatedSaved += eventSavings(event);

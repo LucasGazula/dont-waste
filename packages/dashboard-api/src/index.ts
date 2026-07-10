@@ -25,7 +25,11 @@ export async function createDashboardApp(paths: DataPaths, options: { staticDir?
   const staticDir = await existingDirectory(options.staticDir);
   if (staticDir) await app.register(fastifyStatic, { root: staticDir, wildcard: false });
 
-  app.get("/api/overview", async () => dashboardOverview(await readConfig(paths), store.listEvents()));
+  app.get("/api/overview", async () => dashboardOverview(
+    await readConfig(paths),
+    store.listEvents(),
+    { projects: store.listProjects(), sessions: store.listSessions(50) },
+  ));
   app.get("/api/events", async (request) => {
     const query = request.query as { limit?: string };
     const parsed = Number(query.limit);
@@ -33,6 +37,13 @@ export async function createDashboardApp(paths: DataPaths, options: { staticDir?
     return { events: store.listEvents(limit) };
   });
   app.get("/api/imports", async () => ({ imports: store.recentImports() }));
+  app.get("/api/projects", async () => ({ projects: store.listProjects() }));
+  app.get("/api/sessions", async (request) => {
+    const query = request.query as { limit?: string };
+    const parsed = Number(query.limit);
+    const limit = Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 500) : 100;
+    return { sessions: store.listSessions(limit) };
+  });
   app.get("/api/config", async () => {
     const config = await readConfig(paths);
     return {

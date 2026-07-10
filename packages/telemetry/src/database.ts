@@ -4,6 +4,23 @@ import { DatabaseSync } from "node:sqlite";
 import type { DataPaths } from "@dont-waste/core";
 import type { MetricEvent } from "./metrics.js";
 
+export type ProjectRow = { path: string; alias: string | null };
+export type SessionRow = {
+  id: string;
+  agent: string | null;
+  projectPath: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  metadata: Record<string, unknown>;
+};
+export type ImportRow = {
+  source: string;
+  importedAt: string;
+  cursor: string | null;
+  error: string | null;
+  eventsImported: number;
+};
+
 export class TelemetryStore {
   readonly database: DatabaseSync;
 
@@ -44,7 +61,7 @@ export class TelemetryStore {
         metric_type TEXT NOT NULL, tokens_before REAL, tokens_after REAL,
         tokens_saved REAL, savings_percent REAL, cost_before REAL, cost_after REAL,
         evidence TEXT, confidence TEXT NOT NULL, overlap_key TEXT, source_depth INTEGER NOT NULL,
-        project_path TEXT, agent_id TEXT, session_id TEXT
+        project_path TEXT, agent_id TEXT, session_id TEXT, model TEXT
       ) STRICT;
       CREATE INDEX IF NOT EXISTS metric_events_occurred_at ON metric_events(occurred_at);
       CREATE TABLE IF NOT EXISTS metric_imports (
@@ -56,6 +73,8 @@ export class TelemetryStore {
         plan_json TEXT NOT NULL, result TEXT NOT NULL, snapshot_id TEXT
       ) STRICT;
     `);
+    // Older DBs created before model column — ignore if already present.
+    try { this.database.exec("ALTER TABLE metric_events ADD COLUMN model TEXT"); } catch { /* exists */ }
   }
 
   insertEvents(events: MetricEvent[]): number {
@@ -63,8 +82,8 @@ export class TelemetryStore {
       INSERT OR IGNORE INTO metric_events (
         id, occurred_at, tool, metric_type, tokens_before, tokens_after, tokens_saved,
         savings_percent, cost_before, cost_after, evidence, confidence, overlap_key,
-        source_depth, project_path, agent_id, session_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        source_depth, project_path, agent_id, session_id, model
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     let inserted = 0;
     this.database.exec("BEGIN");
@@ -75,8 +94,19 @@ export class TelemetryStore {
           event.tokensSaved, event.tokensBefore && event.tokensSaved !== null ? event.tokensSaved / event.tokensBefore * 100 : null,
           event.costBefore ?? null, event.costAfter ?? null, event.evidence ?? null, event.confidence,
           event.overlapKey ?? null, event.sourceDepth, event.projectPath ?? null, event.agentId ?? null, event.sessionId ?? null,
+          event.model ?? null,
         );
         inserted += Number(changes.changes);
+        if (event.projectPath) this.upsertProject(event.projectPath);
+        if (event.sessionId) {
+          this.upsertSession({
+            id: event.sessionId,
+            agent: event.agentId,
+            projectPath: event.projectPath,
+            startedAt: event.occurredAt,
+            metadata: event.model ? { model: event.model } : {},
+          });
+        }
       }
       this.database.exec("COMMIT");
     } catch (error) {
@@ -94,15 +124,88 @@ export class TelemetryStore {
       confidence: row.confidence as MetricEvent["confidence"], sourceDepth: Number(row.source_depth),
       overlapKey: (row.overlap_key as string | null) ?? undefined, projectPath: (row.project_path as string | null) ?? undefined,
       agentId: (row.agent_id as string | null) ?? undefined, sessionId: (row.session_id as string | null) ?? undefined,
+      model: (row.model as string | null) ?? undefined,
       evidence: (row.evidence as string | null) ?? undefined, costBefore: (row.cost_before as number | null) ?? undefined,
       costAfter: (row.cost_after as number | null) ?? undefined,
     }));
   }
 
-  recordImport(source: string, eventsImported: number, error?: string): void {
-    this.database.prepare(`INSERT INTO metric_imports (id, source, imported_at, error, events_imported) VALUES (?, ?, ?, ?, ?)`).run(
-      crypto.randomUUID(), source, new Date().toISOString(), error ?? null, eventsImported,
+  recordImport(source: string, eventsImported: number, error?: string, cursor?: string): void {
+    this.database.prepare(`INSERT INTO metric_imports (id, source, imported_at, cursor, error, events_imported) VALUES (?, ?, ?, ?, ?, ?)`).run(
+      crypto.randomUUID(), source, new Date().toISOString(), cursor ?? null, error ?? null, eventsImported,
     );
+  }
+
+  latestImportCursor(source: string): string | undefined {
+    const row = this.database.prepare(`SELECT cursor FROM metric_imports WHERE source = ? AND error IS NULL AND cursor IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).get(source) as { cursor?: string } | undefined;
+    return row?.cursor;
+  }
+
+  upsertProject(projectPath: string, alias?: string): void {
+    this.database.prepare(`INSERT INTO projects (id, path, alias) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET alias = COALESCE(excluded.alias, projects.alias)`).run(
+      crypto.randomUUID(), projectPath, alias ?? null,
+    );
+  }
+
+  listProjects(): ProjectRow[] {
+    return this.database.prepare(`SELECT path, alias FROM projects ORDER BY path`).all().map((row) => {
+      const typed = row as Record<string, unknown>;
+      return { path: String(typed.path), alias: (typed.alias as string | null) ?? null };
+    });
+  }
+
+  upsertSession(input: {
+    id: string;
+    agent?: string | undefined;
+    projectPath?: string | undefined;
+    startedAt?: string | undefined;
+    endedAt?: string | undefined;
+    metadata?: Record<string, unknown> | undefined;
+  }): void {
+    let projectId: string | null = null;
+    if (input.projectPath) {
+      this.upsertProject(input.projectPath);
+      const row = this.database.prepare(`SELECT id FROM projects WHERE path = ?`).get(input.projectPath) as { id?: string } | undefined;
+      projectId = row?.id ?? null;
+    }
+    this.database.prepare(`
+      INSERT INTO sessions (id, agent, project_id, started_at, ended_at, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        agent = COALESCE(excluded.agent, sessions.agent),
+        project_id = COALESCE(excluded.project_id, sessions.project_id),
+        started_at = COALESCE(sessions.started_at, excluded.started_at),
+        ended_at = COALESCE(excluded.ended_at, sessions.ended_at),
+        metadata_json = excluded.metadata_json
+    `).run(
+      input.id,
+      input.agent ?? null,
+      projectId,
+      input.startedAt ?? null,
+      input.endedAt ?? null,
+      JSON.stringify(input.metadata ?? {}),
+    );
+  }
+
+  listSessions(limit = 100): SessionRow[] {
+    const rows = this.database.prepare(`
+      SELECT s.id, s.agent, p.path AS project_path, s.started_at, s.ended_at, s.metadata_json
+      FROM sessions s
+      LEFT JOIN projects p ON p.id = s.project_id
+      ORDER BY COALESCE(s.started_at, '') DESC
+      LIMIT ?
+    `).all(limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.id),
+      agent: (row.agent as string | null) ?? null,
+      projectPath: (row.project_path as string | null) ?? null,
+      startedAt: (row.started_at as string | null) ?? null,
+      endedAt: (row.ended_at as string | null) ?? null,
+      metadata: (() => {
+        try { return JSON.parse(String(row.metadata_json || "{}")) as Record<string, unknown>; }
+        catch { return {}; }
+      })(),
+    }));
   }
 
   recordInstallation(tool: string, version: string | undefined, channel: string, result: "succeeded" | "failed"): void {
@@ -141,10 +244,16 @@ export class TelemetryStore {
     );
   }
 
-  recentImports(limit = 20): Array<{ source: string; importedAt: string; error: string | null; eventsImported: number }> {
-    return this.database.prepare(`SELECT source, imported_at, error, events_imported FROM metric_imports ORDER BY imported_at DESC LIMIT ?`).all(limit).map((row) => {
+  recentImports(limit = 20): ImportRow[] {
+    return this.database.prepare(`SELECT source, imported_at, cursor, error, events_imported FROM metric_imports ORDER BY imported_at DESC LIMIT ?`).all(limit).map((row) => {
       const typed = row as Record<string, unknown>;
-      return { source: String(typed.source), importedAt: String(typed.imported_at), error: typed.error as string | null, eventsImported: Number(typed.events_imported) };
+      return {
+        source: String(typed.source),
+        importedAt: String(typed.imported_at),
+        cursor: (typed.cursor as string | null) ?? null,
+        error: typed.error as string | null,
+        eventsImported: Number(typed.events_imported),
+      };
     });
   }
 

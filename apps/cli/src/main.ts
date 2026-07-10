@@ -193,21 +193,44 @@ async function applyPlan(plan: PlanResult, operationType: "init" | "update", opt
   }
 }
 
-async function collect(paths = getDataPaths()): Promise<{ imports: Array<{ source: string; imported: number; error?: string }>; summary: ReturnType<typeof aggregateEvents> }> {
+async function collect(paths = getDataPaths()): Promise<{ imports: Array<{ source: string; imported: number; error?: string; cursor?: string }>; summary: ReturnType<typeof aggregateEvents>; projects: number; sessions: number }> {
   const config = await readConfig(paths);
   const selectedAgents = Object.keys(config.integrations) as AgentId[];
   const adapters = createAdapters();
   const store = await TelemetryStore.open(paths);
-  const imports: Array<{ source: string; imported: number; error?: string }> = [];
+  for (const project of config.projects) store.upsertProject(project.path, project.alias);
+  const imports: Array<{ source: string; imported: number; error?: string; cursor?: string }> = [];
   for (const tool of toolIds) {
     const imported = await adapters[tool].collectMetrics(context(selectedAgents, false));
     const count = store.insertEvents(imported.events);
-    store.recordImport(imported.source, count, imported.error);
-    imports.push({ source: imported.source, imported: count, ...(imported.error ? { error: imported.error } : {}) });
+    for (const event of imported.events) {
+      if (event.projectPath) store.upsertProject(event.projectPath);
+      if (event.sessionId) {
+        store.upsertSession({
+          id: event.sessionId,
+          agent: event.agentId,
+          projectPath: event.projectPath,
+          startedAt: event.occurredAt,
+          metadata: event.model ? { model: event.model } : {},
+        });
+      }
+    }
+    const cursor = imported.error
+      ? store.latestImportCursor(imported.source)
+      : (imported.events.map((event) => event.occurredAt).sort().at(-1) ?? new Date().toISOString());
+    store.recordImport(imported.source, count, imported.error, cursor);
+    imports.push({
+      source: imported.source,
+      imported: count,
+      ...(imported.error ? { error: imported.error } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
   }
   const summary = aggregateEvents(store.listEvents());
+  const projects = store.listProjects().length;
+  const sessions = store.listSessions().length;
   store.close();
-  return { imports, summary };
+  return { imports, summary, projects, sessions };
 }
 
 async function officialUpdates(): Promise<ReleaseInfo[]> {

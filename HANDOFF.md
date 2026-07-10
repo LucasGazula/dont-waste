@@ -18,7 +18,10 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 ### Catálogo, core, telemetria
 - Matriz declarativa de tools/agentes/modos.
 - `config.json`/`state.json`, snapshots/rollback, `DONT_WASTE_DATA_DIR`.
-- SQLite local (`node:sqlite`) com events/imports/operations; dedupe por `overlapKey`; Caveman stats só via `DONT_WASTE_CAVEMAN_STATS_FILE`.
+- SQLite local (`node:sqlite`) com events/imports/operations/projects/sessions.
+- Fixtures sanitizadas RTK/Headroom/Caveman; importadores com measured/estimated/holdout/benchmark-reference.
+- Cursores de importação; upsert de projetos/sessões; atribuição project/agent/session/model/cost sem prompts/outputs.
+- Dedupe por `overlapKey`; Caveman stats só via `DONT_WASTE_CAVEMAN_STATS_FILE`.
 
 ### Adaptadores (parcialmente endurecidos)
 - **RTK:** download oficial + SHA-256 + timeout de fetch; extração com busca recursiva do binário; flags `rtk init` oficiais por agente; verify binary+gain.
@@ -36,7 +39,7 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 - `update`: compara versões instaladas vs GitHub, respeita `pinned`/`latest`, aplica só tools necessárias, preserva perfil/seleções/features.
 
 ### Dashboard
-- API Fastify local + SPA React; overview/events/imports/config/tools/health.
+- API Fastify local + SPA React; overview/events/imports/projects/sessions/config/tools/health.
 - GET `/` sem conflito com fastifyStatic quando SPA existe.
 
 ## Verificações recentes
@@ -45,10 +48,9 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 
 ## Pendências restantes (próximas fases)
 
-1. **Métricas** — fixtures reais RTK/Headroom; projetos/sessões/cursors completos.
-2. **Dashboard/TUI** — páginas Tools/Config/Diagnostics sem JSON cru; filtros; code-split Recharts; TUI avançada.
-3. **Docker/CI/publish** — smoke Docker; smoke CLI na CI; npm publish / site.
-4. **Fidelidade residual** — Caveman cavecrew/compress; Ponytail uninstall CLI para todos os hosts; Playwright.
+1. **Dashboard/TUI** — páginas Tools/Config/Diagnostics sem JSON cru; filtros; code-split Recharts; TUI avançada.
+2. **Docker/CI/publish** — smoke Docker; smoke CLI na CI; npm publish / site.
+3. **Fidelidade residual** — Caveman cavecrew/compress; Ponytail uninstall CLI para todos os hosts; Playwright.
 
 ## Regras para o próximo agente
 - Não rodar `init --yes` nem installers reais contra HOME do usuário.
