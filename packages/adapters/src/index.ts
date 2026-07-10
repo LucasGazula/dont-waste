@@ -1,4 +1,5 @@
 export * from "./activation.js";
+export * from "./advanced-controls.js";
 export * from "./agents.js";
 export * from "./caveman.js";
 export * from "./config-tools.js";

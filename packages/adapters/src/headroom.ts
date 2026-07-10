@@ -1,6 +1,10 @@
 import { execa } from "execa";
 import { type AgentId } from "@dont-waste/catalog";
 import { importHeadroomJson } from "@dont-waste/telemetry";
+import {
+  HEADROOM_CCR_TTL_SECONDS_VALUE,
+  pendingAdvancedControlNotes,
+} from "./advanced-controls.js";
 import { getAgentPaths } from "./agents.js";
 import { BaseAdapter } from "./base.js";
 import {
@@ -69,6 +73,19 @@ export class HeadroomAdapter extends BaseAdapter {
           optional: true,
         });
     }
+    if (
+      selection.features.learnVerbosity &&
+      context.selectedAgents.length > 0
+    ) {
+      commands.push({
+        command: "headroom",
+        args: ["learn", "--verbosity"],
+        label:
+          "Preview Headroom learned verbosity (dry-run; add --apply manually after review)",
+        interactive: true,
+        optional: true,
+      });
+    }
     const affectedPaths = [
       ...context.selectedAgents.flatMap((agent) =>
         getAgentPaths(agent, context),
@@ -99,8 +116,15 @@ export class HeadroomAdapter extends BaseAdapter {
             `${agent}: Headroom wrap is available; structured MCP registration is not supported for this agent yet.`,
         ),
         selection.features.outputShaper
-          ? "HEADROOM_OUTPUT_SHAPER saves output through a counterfactual estimate unless a holdout is configured."
+          ? "HEADROOM_OUTPUT_SHAPER=1 will be written into marker-owned Headroom MCP env (estimated savings without holdout)."
           : "",
+        selection.features.ccrTtl
+          ? `HEADROOM_CCR_TTL_SECONDS=${HEADROOM_CCR_TTL_SECONDS_VALUE} will be written into marker-owned Headroom MCP env for longer CCR retention.`
+          : "",
+        selection.features.learnVerbosity
+          ? "learn --verbosity is offered as an optional preview only; Don’t Waste never passes --apply automatically."
+          : "",
+        ...pendingAdvancedControlNotes(["headroom"]),
       ].filter(Boolean),
       [...new Set(affectedPaths)],
     );
@@ -123,7 +147,7 @@ export class HeadroomAdapter extends BaseAdapter {
         ],
       };
     }
-    const spec = headroomMcpSpec(headroomPath);
+    const spec = headroomMcpSpec(headroomPath, plan.selection.features);
     const mcpResults: McpRegisterResult[] = [];
     for (const agent of context.selectedAgents.filter((item) =>
       mcpAgents.includes(item),
@@ -181,7 +205,9 @@ export class HeadroomAdapter extends BaseAdapter {
     }
     const headroomPath =
       detection.path ?? (await findExecutable("headroom", context.platform));
-    const expected = headroomPath ? headroomMcpSpec(headroomPath) : undefined;
+    const expected = headroomPath
+      ? headroomMcpSpec(headroomPath, selection.features)
+      : undefined;
     for (const agent of context.selectedAgents.filter((item) =>
       mcpAgents.includes(item),
     )) {
@@ -205,10 +231,17 @@ export class HeadroomAdapter extends BaseAdapter {
         existing.command === expected.command &&
         existing.args.join(" ") === expected.args.join(" ")
       ) {
+        const expectedEnv = expected.env ?? {};
+        const actualEnv = existing.env ?? {};
+        const envOk = Object.entries(expectedEnv).every(
+          ([key, value]) => actualEnv[key] === value,
+        );
         checks.push({
           id: `headroom-mcp-${agent}`,
-          status: "pass",
-          message: `Headroom MCP is configured for ${agent}`,
+          status: envOk ? "pass" : "warn",
+          message: envOk
+            ? `Headroom MCP is configured for ${agent}`
+            : `Headroom MCP for ${agent} is present but feature env differs (marker-owned Codex entries can be refreshed on init)`,
         });
       } else {
         checks.push({
@@ -217,6 +250,21 @@ export class HeadroomAdapter extends BaseAdapter {
           message: `Headroom MCP for ${agent} exists but differs from the expected stdio command; left untouched`,
         });
       }
+    }
+    if (selection.features.ccrTtl) {
+      checks.push({
+        id: "headroom-ccr-ttl",
+        status: "pass",
+        message: `CCR TTL feature requests HEADROOM_CCR_TTL_SECONDS=${HEADROOM_CCR_TTL_SECONDS_VALUE} on marker-owned MCP env`,
+      });
+    }
+    if (selection.features.learnVerbosity) {
+      checks.push({
+        id: "headroom-learn-verbosity",
+        status: "pass",
+        message:
+          "learn --verbosity is configured as optional preview only (no automatic --apply)",
+      });
     }
     return checks;
   }

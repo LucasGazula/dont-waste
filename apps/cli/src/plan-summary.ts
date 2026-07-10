@@ -1,5 +1,8 @@
 import type { AgentId, ToolId } from "@dont-waste/catalog";
-import type { OperationPlan } from "@dont-waste/adapters";
+import {
+  pendingAdvancedControlNotes,
+  type OperationPlan,
+} from "@dont-waste/adapters";
 
 export type PlanSummaryInput = {
   profile: string;
@@ -61,7 +64,8 @@ export function summarizePlanByAgent(input: PlanSummaryInput): AgentPlanRow[] {
         ],
         reversal: ["No agent configs written in install-only mode"],
         notes: [
-          "Advanced controls (CCR/TTL/MCP-shrink) are not exposed in this TUI yet",
+          "install-only: advanced Headroom env/learn controls are not written globally",
+          ...pendingAdvancedControlNotes(["headroom"]),
         ],
       },
     ];
@@ -95,7 +99,13 @@ export function summarizePlanByAgent(input: PlanSummaryInput): AgentPlanRow[] {
       ...tools
         .map((tool) => restartHints[tool])
         .filter((item): item is string => Boolean(item)),
-      "Advanced controls not in this menu: CCR/TTL, MCP-shrink, learn --verbosity",
+      ...pendingAdvancedControlNotes(
+        tools.filter(
+          (tool): tool is "headroom" | "rtk" =>
+            tool === "headroom" || tool === "rtk",
+        ),
+      ),
+      "Supported advanced toggles in TUI when Headroom is enabled: outputShaper, ccrTtl, learnVerbosity",
     ];
     return {
       agent,

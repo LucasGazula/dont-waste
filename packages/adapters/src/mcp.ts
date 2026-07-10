@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentId } from "@dont-waste/catalog";
+import { headroomFeatureEnv } from "./advanced-controls.js";
 import type { AdapterContext } from "./types.js";
 
 export type McpServerSpec = {
@@ -77,7 +78,22 @@ function parseCodexServer(
         item[1]!.replaceAll('\\"', '"').replaceAll("\\\\", "\\"),
       )
     : [];
-  return { name, command, args };
+  const envSection = content.match(
+    new RegExp(`\\[mcp_servers\\.${name}\\.env\\]([\\s\\S]*?)(?=\\n\\[|$)`),
+  );
+  let env: Record<string, string> | undefined;
+  if (envSection?.[1]) {
+    env = {};
+    for (const match of envSection[1].matchAll(
+      /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:\\.|[^"])*)"/gm,
+    )) {
+      env[match[1]!] = match[2]!
+        .replaceAll('\\"', '"')
+        .replaceAll("\\\\", "\\");
+    }
+    if (!Object.keys(env).length) env = undefined;
+  }
+  return { name, command, args, env };
 }
 
 export function codexConfigPath(context: Pick<AdapterContext, "home">): string {
@@ -531,6 +547,14 @@ export async function unregisterHeadroomMcp(
   }
 }
 
-export function headroomMcpSpec(command: string): McpServerSpec {
-  return { name: "headroom", command, args: ["mcp", "serve"] };
+export function headroomMcpSpec(
+  command: string,
+  features: Record<string, boolean> = {},
+): McpServerSpec {
+  return {
+    name: "headroom",
+    command,
+    args: ["mcp", "serve"],
+    env: headroomFeatureEnv(features),
+  };
 }

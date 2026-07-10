@@ -130,7 +130,10 @@ function defaultSelections(profile: Profile): Record<ToolId, ToolSelection> {
         mode: modes[tool],
         features:
           tool === "headroom"
-            ? { outputShaper: profile === "maximum-savings" }
+            ? {
+                outputShaper: profile === "maximum-savings",
+                ccrTtl: profile === "maximum-savings",
+              }
             : tool === "rtk"
               ? { ultraCompact: profile === "maximum-savings" }
               : {},
@@ -306,9 +309,28 @@ async function interactiveRequest(
             initialValue: Boolean(current.features.outputShaper),
           }),
         );
+        const ccrTtl = checked(
+          await confirm({
+            message:
+              "Extend Headroom CCR cache TTL (HEADROOM_CCR_TTL_SECONDS=7200) for long runs?",
+            initialValue: Boolean(current.features.ccrTtl),
+          }),
+        );
+        const learnVerbosity = checked(
+          await confirm({
+            message:
+              "Offer headroom learn --verbosity preview after setup? (never auto --apply)",
+            initialValue: Boolean(current.features.learnVerbosity),
+          }),
+        );
         selections[tool] = {
           ...current,
-          features: { ...current.features, outputShaper },
+          features: {
+            ...current.features,
+            outputShaper,
+            ccrTtl,
+            learnVerbosity,
+          },
         };
       }
       if (tool === "rtk") {

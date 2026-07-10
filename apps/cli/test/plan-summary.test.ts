@@ -82,7 +82,8 @@ describe("init plan summary", () => {
     expect(text).toContain("[interactive/launch-only]");
     expect(text).toContain("compatibility:");
     expect(text).toContain("reversal:");
-    expect(text).toContain("Advanced controls");
+    expect(text).toContain("mcp-shrink");
+    expect(text).toContain("Supported advanced toggles");
   });
 
   it("notes install-only profile without agent activation", () => {
@@ -93,5 +94,6 @@ describe("init plan summary", () => {
     });
     expect(text).toContain("install-only");
     expect(text).toContain("no agent integrations will be activated");
+    expect(text).toContain("mcp-shrink");
   });
 });
