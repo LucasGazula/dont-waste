@@ -8,6 +8,8 @@ Checkout: `/mnt/c/Users/Lucas/orca/projects/dont_waste`
 
 Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Codex, Claude Code, Gemini CLI, Copilot CLI, Antigravity CLI, OpenCode e Pi.
 
+Documentação de utilizador: [`README.md`](README.md). Comparação com upstreams (sem paridade total): [`docs/upstream-capability-audit.md`](docs/upstream-capability-audit.md).
+
 ## Estado atual (implementado)
 
 ### Monorepo e distribuição
