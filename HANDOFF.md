@@ -40,7 +40,14 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 
 ### Dashboard
 - API Fastify local + SPA React; overview/events/imports/projects/sessions/config/tools/health.
+- Overview: daily/weekly aggregation, costs, overlap groups, privacy contract.
+- `/api/events` filters: confidence, tool, project, session.
+- SPA: Tools/Configuration/Diagnostics as structured tables (no raw JSON); Timeline/Context filters; projects/sessions/costs; empty/error/overlap/privacy states.
+- Recharts loaded via `React.lazy` + dynamic `import()` (code-split).
 - GET `/` sem conflito com fastifyStatic quando SPA existe.
+
+### CLI TUI plan
+- `formatPlanSummary`: tabela por agente com tools, paths, restart, compatibility, reversal e nota de controles avançados ainda não expostos.
 
 ## Verificações recentes
 - `pnpm typecheck` / `pnpm test` / `pnpm build` — reexecutar após esta fase.
@@ -48,9 +55,9 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 
 ## Pendências restantes (próximas fases)
 
-1. **Dashboard/TUI** — páginas Tools/Config/Diagnostics sem JSON cru; filtros; code-split Recharts; TUI avançada.
-2. **Docker/CI/publish** — smoke Docker; smoke CLI na CI; npm publish / site.
-3. **Fidelidade residual** — Caveman cavecrew/compress; Ponytail uninstall CLI para todos os hosts; Playwright.
+1. **Docker/CI/publish** — smoke Docker; smoke CLI na CI; npm publish / site.
+2. **Fidelidade residual** — Caveman cavecrew/compress; Ponytail uninstall CLI para todos os hosts.
+3. **Playwright** — ainda sem infra no monorepo; contratos de filtro/overview cobertos por unit tests.
 
 ## Regras para o próximo agente
 - Não rodar `init --yes` nem installers reais contra HOME do usuário.

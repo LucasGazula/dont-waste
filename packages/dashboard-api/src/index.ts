@@ -6,8 +6,11 @@ import { readConfig, type DataPaths } from "@dont-waste/core";
 import { TelemetryStore } from "@dont-waste/telemetry";
 import fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
+import { filterEvents, type EventFilters } from "./filters.js";
 import { dashboardOverview } from "./overview.js";
 
+export { aggregateDaily, aggregateWeekly } from "./aggregation.js";
+export { costTotals, filterEvents, overlapGroups } from "./filters.js";
 export { dashboardOverview } from "./overview.js";
 
 export type DashboardServer = { app: FastifyInstance; url: string; close(): Promise<void> };
@@ -31,10 +34,16 @@ export async function createDashboardApp(paths: DataPaths, options: { staticDir?
     { projects: store.listProjects(), sessions: store.listSessions(50) },
   ));
   app.get("/api/events", async (request) => {
-    const query = request.query as { limit?: string };
+    const query = request.query as EventFilters & { limit?: string };
     const parsed = Number(query.limit);
     const limit = Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 1000) : 500;
-    return { events: store.listEvents(limit) };
+    const filters: EventFilters = {
+      ...(query.confidence ? { confidence: query.confidence } : {}),
+      ...(query.tool ? { tool: query.tool } : {}),
+      ...(query.project ? { project: query.project } : {}),
+      ...(query.session ? { session: query.session } : {}),
+    };
+    return { events: filterEvents(store.listEvents(limit), filters), filters };
   });
   app.get("/api/imports", async () => ({ imports: store.recentImports() }));
   app.get("/api/projects", async () => ({ projects: store.listProjects() }));

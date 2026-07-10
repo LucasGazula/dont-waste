@@ -10,6 +10,7 @@ import { Command } from "commander";
 import { execa } from "execa";
 import { browserOpenCommand, formatDashboardReady, resolveDashboardStaticDir } from "./dashboard-launch.js";
 import { mainMenuOptions, shouldOpenMainMenu, type MenuAction } from "./menu.js";
+import { formatPlanSummary } from "./plan-summary.js";
 import { compareUpdates, toolsNeedingUpdate, type ReleaseInfo } from "./updates.js";
 
 type CommonOptions = { dryRun?: boolean; json?: boolean; yes?: boolean };
@@ -132,9 +133,11 @@ async function makePlan(options: InitOptions): Promise<PlanResult> {
 }
 
 function planText(plan: PlanResult): string {
-  const tools = plan.plans.map((item) => `${item.tool}:\n${item.commands.map((command) => `  ${command.interactive ? "[interactive] " : ""}${command.command} ${command.args.join(" ")}`).join("\n") || "  already installed / no command"}${item.warnings.length ? `\n  warnings: ${item.warnings.join(" · ")}` : ""}`).join("\n\n");
-  const agentsText = plan.request.selectedAgents.join(", ") || "none (install-only)";
-  return `Profile: ${plan.request.profile}\nAgents: ${agentsText}\n\n${tools}`;
+  return formatPlanSummary({
+    profile: plan.request.profile,
+    selectedAgents: plan.request.selectedAgents,
+    plans: plan.plans,
+  });
 }
 
 async function applyPlan(plan: PlanResult, operationType: "init" | "update", options: CommonOptions): Promise<{ operationId?: string; results: unknown[]; checks: unknown[] }> {
