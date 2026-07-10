@@ -1,6 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { z } from "zod";
-import { agentIds, modes, toolIds, type AgentId, type Mode, type ToolId } from "@dont-waste/catalog";
+import {
+  agentIds,
+  modes,
+  toolIds,
+  type AgentId,
+  type Mode,
+  type ToolId,
+} from "@dont-waste/catalog";
 import type { DataPaths } from "./paths.js";
 
 const integrationSchema = z.object({
@@ -16,8 +23,15 @@ export const configSchema = z.object({
   profile: z.enum(["balanced", "maximum-savings", "custom", "install-only"]),
   updateChannel: z.enum(["pinned", "latest"]),
   displayProjectPaths: z.boolean().default(false),
-  integrations: z.record(z.enum(agentIds), z.record(z.enum(toolIds), integrationSchema).default({})).default({}),
-  projects: z.array(z.object({ path: z.string(), alias: z.string().optional() })).default([]),
+  integrations: z
+    .record(
+      z.enum(agentIds),
+      z.record(z.enum(toolIds), integrationSchema).default({}),
+    )
+    .default({}),
+  projects: z
+    .array(z.object({ path: z.string(), alias: z.string().optional() }))
+    .default([]),
 });
 export type DontWasteConfig = z.infer<typeof configSchema>;
 export type IntegrationSettings = z.infer<typeof integrationSchema>;
@@ -35,14 +49,24 @@ export async function readConfig(paths: DataPaths): Promise<DontWasteConfig> {
   try {
     return configSchema.parse(JSON.parse(await readFile(paths.config, "utf8")));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaultConfig();
-    throw new Error(`Invalid Don’t Waste config: ${error instanceof Error ? error.message : String(error)}`);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return defaultConfig();
+    throw new Error(
+      `Invalid Don’t Waste config: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
-export async function writeConfig(paths: DataPaths, config: DontWasteConfig): Promise<void> {
+export async function writeConfig(
+  paths: DataPaths,
+  config: DontWasteConfig,
+): Promise<void> {
   await mkdir(paths.root, { recursive: true });
-  await writeFile(paths.config, `${JSON.stringify(configSchema.parse(config), null, 2)}\n`, "utf8");
+  await writeFile(
+    paths.config,
+    `${JSON.stringify(configSchema.parse(config), null, 2)}\n`,
+    "utf8",
+  );
 }
 
 export function setIntegration(
@@ -54,7 +78,12 @@ export function setIntegration(
 ): DontWasteConfig {
   const integrations = structuredClone(config.integrations);
   const byAgent = integrations[agent] ?? {};
-  byAgent[tool] = { enabled: mode !== "off", mode, features, installedAt: new Date().toISOString() };
+  byAgent[tool] = {
+    enabled: mode !== "off",
+    mode,
+    features,
+    installedAt: new Date().toISOString(),
+  };
   integrations[agent] = byAgent;
   return { ...config, integrations };
 }

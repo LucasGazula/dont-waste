@@ -6,7 +6,9 @@
   "bin": {
     "dont-waste": "./dist/main.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/main.ts",

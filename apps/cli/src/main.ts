@@ -1,24 +1,83 @@
 import { existsSync } from "node:fs";
 import process from "node:process";
-import { cancel, confirm, intro, isCancel, multiselect, note, outro, select, spinner } from "@clack/prompts";
-import { createAdapters, detectAgents, configuredToolsFromConfig, shouldActivateIntegration, type AdapterContext, type InstallResult, type OperationPlan, type ToolSelection } from "@dont-waste/adapters";
-import { agents, balancedSelection, toolIds, type AgentId, type Mode, type ToolId } from "@dont-waste/catalog";
-import { createOperation, getDataPaths, readConfig, restoreOperation, setIntegration, updateOperation, writeConfig, type DontWasteConfig } from "@dont-waste/core";
+import {
+  cancel,
+  confirm,
+  intro,
+  isCancel,
+  multiselect,
+  note,
+  outro,
+  select,
+  spinner,
+} from "@clack/prompts";
+import {
+  createAdapters,
+  detectAgents,
+  configuredToolsFromConfig,
+  shouldActivateIntegration,
+  type AdapterContext,
+  type InstallResult,
+  type OperationPlan,
+  type ToolSelection,
+} from "@dont-waste/adapters";
+import {
+  agents,
+  balancedSelection,
+  toolIds,
+  type AgentId,
+  type Mode,
+  type ToolId,
+} from "@dont-waste/catalog";
+import {
+  createOperation,
+  getDataPaths,
+  readConfig,
+  restoreOperation,
+  setIntegration,
+  updateOperation,
+  writeConfig,
+  type DontWasteConfig,
+} from "@dont-waste/core";
 import { createDashboardServer } from "@dont-waste/dashboard-api";
 import { TelemetryStore, aggregateEvents } from "@dont-waste/telemetry";
 import { Command } from "commander";
 import { execa } from "execa";
-import { browserOpenCommand, formatDashboardReady, resolveDashboardStaticDir } from "./dashboard-launch.js";
-import { mainMenuOptions, shouldOpenMainMenu, type MenuAction } from "./menu.js";
+import {
+  browserOpenCommand,
+  formatDashboardReady,
+  resolveDashboardStaticDir,
+} from "./dashboard-launch.js";
+import {
+  mainMenuOptions,
+  shouldOpenMainMenu,
+  type MenuAction,
+} from "./menu.js";
 import { formatPlanSummary } from "./plan-summary.js";
-import { compareUpdates, toolsNeedingUpdate, type ReleaseInfo } from "./updates.js";
+import {
+  compareUpdates,
+  toolsNeedingUpdate,
+  type ReleaseInfo,
+} from "./updates.js";
 
 type CommonOptions = { dryRun?: boolean; json?: boolean; yes?: boolean };
-type InitOptions = CommonOptions & { profile?: Profile; channel?: "pinned" | "latest" };
+type InitOptions = CommonOptions & {
+  profile?: Profile;
+  channel?: "pinned" | "latest";
+};
 type DashboardOptions = CommonOptions & { port?: string; open: boolean };
 type Profile = "balanced" | "maximum-savings" | "custom" | "install-only";
-type InitRequest = { profile: Profile; channel: "pinned" | "latest"; selectedAgents: AgentId[]; selections: Record<ToolId, ToolSelection> };
-type PlanResult = { request: InitRequest; plans: OperationPlan[]; diagnostics: Awaited<ReturnType<typeof detectAgents>> };
+type InitRequest = {
+  profile: Profile;
+  channel: "pinned" | "latest";
+  selectedAgents: AgentId[];
+  selections: Record<ToolId, ToolSelection>;
+};
+type PlanResult = {
+  request: InitRequest;
+  plans: OperationPlan[];
+  diagnostics: Awaited<ReturnType<typeof detectAgents>>;
+};
 
 const packageVersion = "0.1.0";
 const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
@@ -35,87 +94,240 @@ function result(value: unknown, options: CommonOptions): void {
 }
 function render(value: unknown): string {
   if (Array.isArray(value)) return value.map(render).join("\n");
-  if (value && typeof value === "object") return Object.entries(value as Record<string, unknown>).map(([key, item]) => `${key}: ${typeof item === "object" ? JSON.stringify(item) : String(item)}`).join("\n");
+  if (value && typeof value === "object")
+    return Object.entries(value as Record<string, unknown>)
+      .map(
+        ([key, item]) =>
+          `${key}: ${typeof item === "object" ? JSON.stringify(item) : String(item)}`,
+      )
+      .join("\n");
   return String(value);
 }
 function requireConfirmation(options: CommonOptions): void {
-  if (!options.yes && !options.dryRun && !process.stdin.isTTY) throw new Error("Refusing to modify this machine without a terminal. Re-run with --yes after reviewing --dry-run.");
+  if (!options.yes && !options.dryRun && !process.stdin.isTTY)
+    throw new Error(
+      "Refusing to modify this machine without a terminal. Re-run with --yes after reviewing --dry-run.",
+    );
 }
 function checked<T>(value: T | symbol): T {
-  if (isCancel(value)) { cancel("Operation cancelled."); process.exit(0); }
+  if (isCancel(value)) {
+    cancel("Operation cancelled.");
+    process.exit(0);
+  }
   return value as T;
 }
 function defaultSelections(profile: Profile): Record<ToolId, ToolSelection> {
   const modes = balancedSelection();
   if (profile === "maximum-savings") modes.caveman = "ultra";
-  if (profile === "install-only") return Object.fromEntries(toolIds.map((tool) => [tool, { mode: "full", features: {} }])) as Record<ToolId, ToolSelection>;
-  return Object.fromEntries(toolIds.map((tool) => [tool, { mode: modes[tool], features: tool === "headroom" ? { outputShaper: profile === "maximum-savings" } : tool === "rtk" ? { ultraCompact: profile === "maximum-savings" } : {} }])) as Record<ToolId, ToolSelection>;
+  if (profile === "install-only")
+    return Object.fromEntries(
+      toolIds.map((tool) => [tool, { mode: "full", features: {} }]),
+    ) as Record<ToolId, ToolSelection>;
+  return Object.fromEntries(
+    toolIds.map((tool) => [
+      tool,
+      {
+        mode: modes[tool],
+        features:
+          tool === "headroom"
+            ? { outputShaper: profile === "maximum-savings" }
+            : tool === "rtk"
+              ? { ultraCompact: profile === "maximum-savings" }
+              : {},
+      },
+    ]),
+  ) as Record<ToolId, ToolSelection>;
 }
 
 /** Preserve custom modes/features already saved in config when planning updates. */
-function selectionsFromConfig(config: DontWasteConfig): Record<ToolId, ToolSelection> {
+function selectionsFromConfig(
+  config: DontWasteConfig,
+): Record<ToolId, ToolSelection> {
   const selections = defaultSelections(config.profile);
   for (const tools of Object.values(config.integrations)) {
     if (!tools) continue;
     for (const tool of toolIds) {
       const settings = tools[tool];
       if (settings?.enabled && settings.mode !== "off") {
-        selections[tool] = { mode: settings.mode, features: settings.features ?? {} };
+        selections[tool] = {
+          mode: settings.mode,
+          features: settings.features ?? {},
+        };
       }
     }
   }
   return selections;
 }
 
-async function interactiveRequest(options: InitOptions, diagnostics: Awaited<ReturnType<typeof detectAgents>>): Promise<InitRequest> {
-  const detected = diagnostics.filter((item) => item.detected || item.existingConfigs.length > 0).map((item) => item.agent);
+async function interactiveRequest(
+  options: InitOptions,
+  diagnostics: Awaited<ReturnType<typeof detectAgents>>,
+): Promise<InitRequest> {
+  const detected = diagnostics
+    .filter((item) => item.detected || item.existingConfigs.length > 0)
+    .map((item) => item.agent);
   if (options.yes || options.dryRun || !process.stdin.isTTY) {
     const profile = options.profile ?? "balanced";
-    return { profile, channel: options.channel ?? "pinned", selectedAgents: detected, selections: defaultSelections(profile) };
+    return {
+      profile,
+      channel: options.channel ?? "pinned",
+      selectedAgents: detected,
+      selections: defaultSelections(profile),
+    };
   }
   intro("Don’t Waste setup");
-  note(diagnostics.map((agent) => `${agent.agent.padEnd(16)} ${agent.detected ? `found ${agent.version ?? ""}` : "not on PATH"}${agent.existingConfigs.length ? ` · config: ${agent.existingConfigs.join(", ")}` : ""}`).join("\n"), "Environment diagnosis");
-  const profile = checked(await select({ message: "Choose a profile", initialValue: options.profile ?? "balanced", options: [
-    { value: "balanced", label: "Balanced", hint: "RTK + Headroom where compatible; Caveman and Ponytail full" },
-    { value: "maximum-savings", label: "Maximum savings", hint: "aggressive output shaping and ultra compact RTK" },
-    { value: "custom", label: "Custom", hint: "choose tools and modes" },
-    { value: "install-only", label: "Install only", hint: "do not activate agent integrations" },
-  ] })) as Profile;
-  const selectedAgents = checked(await multiselect({ message: "Which detected agents should be configured?", options: diagnostics.map((agent) => ({ value: agent.agent, label: agents.find((item) => item.id === agent.agent)?.label ?? agent.agent, ...(agent.detected && agent.version ? { hint: agent.version } : { hint: "configuration found" }) })) as never, initialValues: detected })) as AgentId[];
+  note(
+    diagnostics
+      .map(
+        (agent) =>
+          `${agent.agent.padEnd(16)} ${agent.detected ? `found ${agent.version ?? ""}` : "not on PATH"}${agent.existingConfigs.length ? ` · config: ${agent.existingConfigs.join(", ")}` : ""}`,
+      )
+      .join("\n"),
+    "Environment diagnosis",
+  );
+  const profile = checked(
+    await select({
+      message: "Choose a profile",
+      initialValue: options.profile ?? "balanced",
+      options: [
+        {
+          value: "balanced",
+          label: "Balanced",
+          hint: "RTK + Headroom where compatible; Caveman and Ponytail full",
+        },
+        {
+          value: "maximum-savings",
+          label: "Maximum savings",
+          hint: "aggressive output shaping and ultra compact RTK",
+        },
+        { value: "custom", label: "Custom", hint: "choose tools and modes" },
+        {
+          value: "install-only",
+          label: "Install only",
+          hint: "do not activate agent integrations",
+        },
+      ],
+    }),
+  ) as Profile;
+  const selectedAgents = checked(
+    await multiselect({
+      message: "Which detected agents should be configured?",
+      options: diagnostics.map((agent) => ({
+        value: agent.agent,
+        label:
+          agents.find((item) => item.id === agent.agent)?.label ?? agent.agent,
+        ...(agent.detected && agent.version
+          ? { hint: agent.version }
+          : { hint: "configuration found" }),
+      })) as never,
+      initialValues: detected,
+    }),
+  ) as AgentId[];
   const selections = defaultSelections(profile);
   if (profile !== "install-only") {
     for (const tool of toolIds) {
       const current = selections[tool]!;
-      const enabled = checked(await confirm({ message: `${tool}: ${tool === "headroom" ? "compress context through proxy/MCP" : tool === "rtk" ? "compact shell outputs before they reach the agent" : tool === "caveman" ? "reduce agent response verbosity" : "enforce the minimal engineering ladder"}`, initialValue: current.mode !== "off" }));
-      if (!enabled) { selections[tool] = { mode: "off", features: {} }; continue; }
+      const enabled = checked(
+        await confirm({
+          message: `${tool}: ${tool === "headroom" ? "compress context through proxy/MCP" : tool === "rtk" ? "compact shell outputs before they reach the agent" : tool === "caveman" ? "reduce agent response verbosity" : "enforce the minimal engineering ladder"}`,
+          initialValue: current.mode !== "off",
+        }),
+      );
+      if (!enabled) {
+        selections[tool] = { mode: "off", features: {} };
+        continue;
+      }
       if (tool === "caveman") {
-        const mode = checked(await select({ message: "Caveman default mode", initialValue: current.mode === "off" ? "full" : current.mode, options: [
-          { value: "lite", label: "lite", hint: "short answers with more explanation" },
-          { value: "full", label: "full", hint: "recommended direct fragments" },
-          { value: "ultra", label: "ultra", hint: "maximum concision" },
-          { value: "wenyan", label: "wenyan", hint: "classical Chinese; intentionally changes language" },
-        ] })) as Mode;
-        const statusline = checked(await confirm({ message: "Enable Caveman savings statusline?", initialValue: false }));
+        const mode = checked(
+          await select({
+            message: "Caveman default mode",
+            initialValue: current.mode === "off" ? "full" : current.mode,
+            options: [
+              {
+                value: "lite",
+                label: "lite",
+                hint: "short answers with more explanation",
+              },
+              {
+                value: "full",
+                label: "full",
+                hint: "recommended direct fragments",
+              },
+              { value: "ultra", label: "ultra", hint: "maximum concision" },
+              {
+                value: "wenyan",
+                label: "wenyan",
+                hint: "classical Chinese; intentionally changes language",
+              },
+            ],
+          }),
+        ) as Mode;
+        const statusline = checked(
+          await confirm({
+            message: "Enable Caveman savings statusline?",
+            initialValue: false,
+          }),
+        );
         selections[tool] = { mode, features: { statusline } };
       }
       if (tool === "ponytail") {
-        const mode = checked(await select({ message: "Ponytail default mode", initialValue: current.mode === "wenyan" ? "full" : current.mode, options: ["lite", "full", "ultra"].map((value) => ({ value, label: value })) })) as Mode;
+        const mode = checked(
+          await select({
+            message: "Ponytail default mode",
+            initialValue: current.mode === "wenyan" ? "full" : current.mode,
+            options: ["lite", "full", "ultra"].map((value) => ({
+              value,
+              label: value,
+            })),
+          }),
+        ) as Mode;
         selections[tool] = { mode, features: {} };
       }
       if (tool === "headroom") {
-        const outputShaper = checked(await confirm({ message: "Enable Headroom output shaping? Savings are estimated without a holdout.", initialValue: Boolean(current.features.outputShaper) }));
-        selections[tool] = { ...current, features: { ...current.features, outputShaper } };
+        const outputShaper = checked(
+          await confirm({
+            message:
+              "Enable Headroom output shaping? Savings are estimated without a holdout.",
+            initialValue: Boolean(current.features.outputShaper),
+          }),
+        );
+        selections[tool] = {
+          ...current,
+          features: { ...current.features, outputShaper },
+        };
       }
       if (tool === "rtk") {
-        const ultraCompact = checked(await confirm({ message: "Use RTK ultra-compact direct-command mode?", initialValue: Boolean(current.features.ultraCompact) }));
-        selections[tool] = { ...current, features: { ...current.features, ultraCompact } };
+        const ultraCompact = checked(
+          await confirm({
+            message: "Use RTK ultra-compact direct-command mode?",
+            initialValue: Boolean(current.features.ultraCompact),
+          }),
+        );
+        selections[tool] = {
+          ...current,
+          features: { ...current.features, ultraCompact },
+        };
       }
     }
   }
-  const channel = checked(await select({ message: "Update policy", initialValue: options.channel ?? "pinned", options: [
-    { value: "pinned", label: "Pinned", hint: "record versions; never change them automatically" },
-    { value: "latest", label: "Latest", hint: "check official releases and ask before applying" },
-  ] })) as "pinned" | "latest";
+  const channel = checked(
+    await select({
+      message: "Update policy",
+      initialValue: options.channel ?? "pinned",
+      options: [
+        {
+          value: "pinned",
+          label: "Pinned",
+          hint: "record versions; never change them automatically",
+        },
+        {
+          value: "latest",
+          label: "Latest",
+          hint: "check official releases and ask before applying",
+        },
+      ],
+    }),
+  ) as "pinned" | "latest";
   return { profile, channel, selectedAgents, selections };
 }
 
@@ -127,7 +339,15 @@ async function makePlan(options: InitOptions): Promise<PlanResult> {
   for (const tool of toolIds) {
     const selection = request.selections[tool];
     if (!selection || selection.mode === "off") continue;
-    plans.push(await adapters[tool].planInstall(selection, context(request.profile === "install-only" ? [] : request.selectedAgents, Boolean(options.dryRun))));
+    plans.push(
+      await adapters[tool].planInstall(
+        selection,
+        context(
+          request.profile === "install-only" ? [] : request.selectedAgents,
+          Boolean(options.dryRun),
+        ),
+      ),
+    );
   }
   return { request, plans, diagnostics };
 }
@@ -140,71 +360,188 @@ function planText(plan: PlanResult): string {
   });
 }
 
-async function applyPlan(plan: PlanResult, operationType: "init" | "update", options: CommonOptions): Promise<{ operationId?: string; results: unknown[]; checks: unknown[] }> {
+async function applyPlan(
+  plan: PlanResult,
+  operationType: "init" | "update",
+  options: CommonOptions,
+): Promise<{ operationId?: string; results: unknown[]; checks: unknown[] }> {
   const paths = getDataPaths();
-  if (options.dryRun) return { results: plan.plans.map((item) => ({ tool: item.tool, status: "dry-run", commands: item.commands })), checks: [] };
-  const affected = [...new Set([paths.config, ...plan.plans.flatMap((item) => item.affectedPaths)])];
-  const operation = await createOperation(paths, operationType, { request: plan.request, plans: plan.plans }, affected);
+  if (options.dryRun)
+    return {
+      results: plan.plans.map((item) => ({
+        tool: item.tool,
+        status: "dry-run",
+        commands: item.commands,
+      })),
+      checks: [],
+    };
+  const affected = [
+    ...new Set([
+      paths.config,
+      ...plan.plans.flatMap((item) => item.affectedPaths),
+    ]),
+  ];
+  const operation = await createOperation(
+    paths,
+    operationType,
+    { request: plan.request, plans: plan.plans },
+    affected,
+  );
   await updateOperation(paths, operation.id, "running");
   const adapters = createAdapters();
-  const results: Array<{ tool: ToolId; succeeded: boolean; errors: string[]; skippedInteractive: string[] }> = [];
+  const results: Array<{
+    tool: ToolId;
+    succeeded: boolean;
+    errors: string[];
+    skippedInteractive: string[];
+  }> = [];
   try {
     const installByTool = new Map<ToolId, InstallResult>();
     for (const toolPlan of plan.plans) {
-      const installed = await adapters[toolPlan.tool].install(toolPlan, context(plan.request.profile === "install-only" ? [] : plan.request.selectedAgents, false));
+      const installed = await adapters[toolPlan.tool].install(
+        toolPlan,
+        context(
+          plan.request.profile === "install-only"
+            ? []
+            : plan.request.selectedAgents,
+          false,
+        ),
+      );
       installByTool.set(toolPlan.tool, installed);
       results.push({
         tool: toolPlan.tool,
         succeeded: installed.succeeded,
         errors: installed.errors,
-        skippedInteractive: installed.skipped.filter((command) => command.interactive && !command.optional).map((command) => command.label),
+        skippedInteractive: installed.skipped
+          .filter((command) => command.interactive && !command.optional)
+          .map((command) => command.label),
       });
       if (!installed.succeeded) throw new Error(installed.errors.join("; "));
     }
-    const checks = await Promise.all(plan.plans.map(async (item) => ({ tool: item.tool, checks: await adapters[item.tool].verify(plan.request.selections[item.tool]!, context(plan.request.selectedAgents, false)) })));
+    const checks = await Promise.all(
+      plan.plans.map(async (item) => ({
+        tool: item.tool,
+        checks: await adapters[item.tool].verify(
+          plan.request.selections[item.tool]!,
+          context(plan.request.selectedAgents, false),
+        ),
+      })),
+    );
     let config = await readConfig(paths);
-    config = { ...config, profile: plan.request.profile, updateChannel: plan.request.channel };
+    config = {
+      ...config,
+      profile: plan.request.profile,
+      updateChannel: plan.request.channel,
+    };
     const telemetry = await TelemetryStore.open(paths);
-    for (const diagnostic of plan.diagnostics) telemetry.recordAgent(diagnostic.agent, diagnostic.existingConfigs[0], diagnostic.version);
+    for (const diagnostic of plan.diagnostics)
+      telemetry.recordAgent(
+        diagnostic.agent,
+        diagnostic.existingConfigs[0],
+        diagnostic.version,
+      );
     for (const item of checks) {
       const selected = plan.request.selections[item.tool]!;
       const installed = installByTool.get(item.tool)!;
-      const activate = shouldActivateIntegration({ profile: plan.request.profile, checks: item.checks, install: installed });
+      const activate = shouldActivateIntegration({
+        profile: plan.request.profile,
+        checks: item.checks,
+        install: installed,
+      });
       if (activate) {
         for (const agent of plan.request.selectedAgents) {
-          config = setIntegration(config, agent, item.tool, selected.mode, selected.features);
-          telemetry.recordIntegration(agent, item.tool, selected.features, "active", operation.id);
+          config = setIntegration(
+            config,
+            agent,
+            item.tool,
+            selected.mode,
+            selected.features,
+          );
+          telemetry.recordIntegration(
+            agent,
+            item.tool,
+            selected.features,
+            "active",
+            operation.id,
+          );
         }
       } else if (plan.request.profile !== "install-only") {
         for (const agent of plan.request.selectedAgents) {
-          telemetry.recordIntegration(agent, item.tool, selected.features, item.checks.some((check) => check.status === "fail") || !installed.succeeded ? "failed" : "pending", operation.id);
+          telemetry.recordIntegration(
+            agent,
+            item.tool,
+            selected.features,
+            item.checks.some((check) => check.status === "fail") ||
+              !installed.succeeded
+              ? "failed"
+              : "pending",
+            operation.id,
+          );
         }
       }
-      const detection = await adapters[item.tool].detect(context(plan.request.selectedAgents, false));
-      const version = nodeBackedTools.has(item.tool) ? undefined : detection.version;
-      telemetry.recordInstallation(item.tool, version, plan.request.channel, activate ? "succeeded" : "failed");
+      const detection = await adapters[item.tool].detect(
+        context(plan.request.selectedAgents, false),
+      );
+      const version = nodeBackedTools.has(item.tool)
+        ? undefined
+        : detection.version;
+      telemetry.recordInstallation(
+        item.tool,
+        version,
+        plan.request.channel,
+        activate ? "succeeded" : "failed",
+      );
     }
-    telemetry.recordOperation(operation.id, operationType, plan, "succeeded", operation.snapshotFile);
+    telemetry.recordOperation(
+      operation.id,
+      operationType,
+      plan,
+      "succeeded",
+      operation.snapshotFile,
+    );
     telemetry.close();
     await writeConfig(paths, config);
     await updateOperation(paths, operation.id, "succeeded");
     return { operationId: operation.id, results, checks };
   } catch (error) {
     await restoreOperation(paths, operation.id);
-    await updateOperation(paths, operation.id, "failed", error instanceof Error ? error.message : String(error));
+    await updateOperation(
+      paths,
+      operation.id,
+      "failed",
+      error instanceof Error ? error.message : String(error),
+    );
     throw error;
   }
 }
 
-async function collect(paths = getDataPaths()): Promise<{ imports: Array<{ source: string; imported: number; error?: string; cursor?: string }>; summary: ReturnType<typeof aggregateEvents>; projects: number; sessions: number }> {
+async function collect(paths = getDataPaths()): Promise<{
+  imports: Array<{
+    source: string;
+    imported: number;
+    error?: string;
+    cursor?: string;
+  }>;
+  summary: ReturnType<typeof aggregateEvents>;
+  projects: number;
+  sessions: number;
+}> {
   const config = await readConfig(paths);
   const selectedAgents = Object.keys(config.integrations) as AgentId[];
   const adapters = createAdapters();
   const store = await TelemetryStore.open(paths);
-  for (const project of config.projects) store.upsertProject(project.path, project.alias);
-  const imports: Array<{ source: string; imported: number; error?: string; cursor?: string }> = [];
+  for (const project of config.projects)
+    store.upsertProject(project.path, project.alias);
+  const imports: Array<{
+    source: string;
+    imported: number;
+    error?: string;
+    cursor?: string;
+  }> = [];
   for (const tool of toolIds) {
-    const imported = await adapters[tool].collectMetrics(context(selectedAgents, false));
+    const imported = await adapters[tool].collectMetrics(
+      context(selectedAgents, false),
+    );
     const count = store.insertEvents(imported.events);
     for (const event of imported.events) {
       if (event.projectPath) store.upsertProject(event.projectPath);
@@ -220,7 +557,10 @@ async function collect(paths = getDataPaths()): Promise<{ imports: Array<{ sourc
     }
     const cursor = imported.error
       ? store.latestImportCursor(imported.source)
-      : (imported.events.map((event) => event.occurredAt).sort().at(-1) ?? new Date().toISOString());
+      : (imported.events
+          .map((event) => event.occurredAt)
+          .sort()
+          .at(-1) ?? new Date().toISOString());
     store.recordImport(imported.source, count, imported.error, cursor);
     imports.push({
       source: imported.source,
@@ -238,36 +578,66 @@ async function collect(paths = getDataPaths()): Promise<{ imports: Array<{ sourc
 
 async function officialUpdates(): Promise<ReleaseInfo[]> {
   const repositories: Record<ToolId, string> = {
-    headroom: "headroomlabs-ai/headroom", rtk: "rtk-ai/rtk", caveman: "JuliusBrussee/caveman", ponytail: "DietrichGebert/ponytail",
+    headroom: "headroomlabs-ai/headroom",
+    rtk: "rtk-ai/rtk",
+    caveman: "JuliusBrussee/caveman",
+    ponytail: "DietrichGebert/ponytail",
   };
-  return Promise.all(toolIds.map(async (tool) => {
-    const url = `https://github.com/${repositories[tool]}/releases/latest`;
-    try {
-      const response = await fetch(`https://api.github.com/repos/${repositories[tool]}/releases/latest`, {
-        headers: { Accept: "application/vnd.github+json", "User-Agent": "dont-waste" },
-      });
-      if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-      const body = await response.json() as { tag_name?: string; html_url?: string };
-      return { tool, latest: body.tag_name, url: body.html_url ?? url };
-    } catch (error) { return { tool, url, error: error instanceof Error ? error.message : String(error) }; }
-  }));
+  return Promise.all(
+    toolIds.map(async (tool) => {
+      const url = `https://github.com/${repositories[tool]}/releases/latest`;
+      try {
+        const response = await fetch(
+          `https://api.github.com/repos/${repositories[tool]}/releases/latest`,
+          {
+            headers: {
+              Accept: "application/vnd.github+json",
+              "User-Agent": "dont-waste",
+            },
+          },
+        );
+        if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+        const body = (await response.json()) as {
+          tag_name?: string;
+          html_url?: string;
+        };
+        return { tool, latest: body.tag_name, url: body.html_url ?? url };
+      } catch (error) {
+        return {
+          tool,
+          url,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
 }
 
-async function installedToolVersions(): Promise<Array<{ tool: ToolId; installed?: string | undefined; detected: boolean }>> {
+async function installedToolVersions(): Promise<
+  Array<{ tool: ToolId; installed?: string | undefined; detected: boolean }>
+> {
   const adapters = createAdapters();
   const paths = getDataPaths();
   const store = await TelemetryStore.open(paths);
-  const result = await Promise.all(toolIds.map(async (tool) => {
-    const detection = await adapters[tool].detect(context([], true));
-    const recorded = store.latestInstallation(tool)?.version ?? undefined;
-    const installed = nodeBackedTools.has(tool) ? recorded : (detection.version ?? recorded);
-    return { tool, installed, detected: detection.detected };
-  }));
+  const result = await Promise.all(
+    toolIds.map(async (tool) => {
+      const detection = await adapters[tool].detect(context([], true));
+      const recorded = store.latestInstallation(tool)?.version ?? undefined;
+      const installed = nodeBackedTools.has(tool)
+        ? recorded
+        : (detection.version ?? recorded);
+      return { tool, installed, detected: detection.detected };
+    }),
+  );
   store.close();
   return result;
 }
 
-async function makeUpdatePlan(options: CommonOptions, config: DontWasteConfig, onlyTools: ToolId[]): Promise<PlanResult> {
+async function makeUpdatePlan(
+  options: CommonOptions,
+  config: DontWasteConfig,
+  onlyTools: ToolId[],
+): Promise<PlanResult> {
   const selectedAgents = Object.keys(config.integrations) as AgentId[];
   const selections = selectionsFromConfig(config);
   const diagnostics = await detectAgents(context([], Boolean(options.dryRun)));
@@ -276,10 +646,15 @@ async function makeUpdatePlan(options: CommonOptions, config: DontWasteConfig, o
   for (const tool of onlyTools) {
     const selection = selections[tool];
     if (!selection || selection.mode === "off") continue;
-    plans.push(await adapters[tool].planInstall(
-      selection,
-      context(config.profile === "install-only" ? [] : selectedAgents, Boolean(options.dryRun)),
-    ));
+    plans.push(
+      await adapters[tool].planInstall(
+        selection,
+        context(
+          config.profile === "install-only" ? [] : selectedAgents,
+          Boolean(options.dryRun),
+        ),
+      ),
+    );
   }
   return {
     request: {
@@ -294,43 +669,72 @@ async function makeUpdatePlan(options: CommonOptions, config: DontWasteConfig, o
 }
 
 async function runUpdate(options: CommonOptions): Promise<void> {
-  const [releases, installed] = await Promise.all([officialUpdates(), installedToolVersions()]);
+  const [releases, installed] = await Promise.all([
+    officialUpdates(),
+    installedToolVersions(),
+  ]);
   const comparisons = compareUpdates(installed, releases);
   const needing = toolsNeedingUpdate(comparisons);
   const config = await readConfig(getDataPaths());
   if (!options.yes || options.dryRun) {
-    return result({
-      dontWaste: packageVersion,
-      updateChannel: config.updateChannel,
-      comparisons,
-      needingUpdate: needing,
-      next: config.updateChannel === "pinned"
-        ? "Channel is pinned: review release URLs above; switch updateChannel to latest before applying with --yes."
-        : needing.length
-          ? "Review release notes for tools marked update-available/not-installed; rerun with --yes to apply an idempotent plan only for those tools."
-          : "All detected tools look up to date with the latest GitHub releases.",
-    }, options);
+    return result(
+      {
+        dontWaste: packageVersion,
+        updateChannel: config.updateChannel,
+        comparisons,
+        needingUpdate: needing,
+        next:
+          config.updateChannel === "pinned"
+            ? "Channel is pinned: review release URLs above; switch updateChannel to latest before applying with --yes."
+            : needing.length
+              ? "Review release notes for tools marked update-available/not-installed; rerun with --yes to apply an idempotent plan only for those tools."
+              : "All detected tools look up to date with the latest GitHub releases.",
+      },
+      options,
+    );
   }
   requireConfirmation(options);
   if (config.updateChannel === "pinned") {
-    return result({
-      dontWaste: packageVersion,
-      updateChannel: "pinned",
-      comparisons,
-      applied: false,
-      reason: "Refusing to apply updates while updateChannel is pinned.",
-    }, options);
+    return result(
+      {
+        dontWaste: packageVersion,
+        updateChannel: "pinned",
+        comparisons,
+        applied: false,
+        reason: "Refusing to apply updates while updateChannel is pinned.",
+      },
+      options,
+    );
   }
   if (!needing.length) {
-    return result({ dontWaste: packageVersion, comparisons, applied: false, reason: "nothing to update" }, options);
+    return result(
+      {
+        dontWaste: packageVersion,
+        comparisons,
+        applied: false,
+        reason: "nothing to update",
+      },
+      options,
+    );
   }
   const setup = await makeUpdatePlan(options, config, needing);
-  if (!options.json) note(planText(setup), "Update plan (tools needing changes only)");
-  result({ comparisons, needingUpdate: needing, ...(await applyPlan(setup, "update", options)) }, options);
+  if (!options.json)
+    note(planText(setup), "Update plan (tools needing changes only)");
+  result(
+    {
+      comparisons,
+      needingUpdate: needing,
+      ...(await applyPlan(setup, "update", options)),
+    },
+    options,
+  );
 }
 
 function addCommonOptions(command: Command): Command {
-  return command.option("--dry-run", "show changes without modifying this machine").option("--json", "write machine-readable JSON").option("--yes", "skip confirmation after the plan is shown");
+  return command
+    .option("--dry-run", "show changes without modifying this machine")
+    .option("--json", "write machine-readable JSON")
+    .option("--yes", "skip confirmation after the plan is shown");
 }
 
 async function runInit(options: InitOptions): Promise<void> {
@@ -339,8 +743,13 @@ async function runInit(options: InitOptions): Promise<void> {
   if (!options.json) {
     note(planText(setup), "Planned changes");
     if (!options.dryRun && !options.yes) {
-      const accepted = checked(await confirm({ message: "Apply this plan?", initialValue: false }));
-      if (!accepted) { cancel("No changes were made."); return; }
+      const accepted = checked(
+        await confirm({ message: "Apply this plan?", initialValue: false }),
+      );
+      if (!accepted) {
+        cancel("No changes were made.");
+        return;
+      }
     }
   }
   const work = !options.json && !options.dryRun ? spinner() : undefined;
@@ -348,14 +757,21 @@ async function runInit(options: InitOptions): Promise<void> {
   const applied = await applyPlan(setup, "init", options);
   work?.stop("Plan finished");
   result({ plan: setup, ...applied }, options);
-  if (!options.json && !options.dryRun) outro(`Done. Operation ${applied.operationId}. Run dont-waste collect after using an enabled agent.`);
+  if (!options.json && !options.dryRun)
+    outro(
+      `Done. Operation ${applied.operationId}. Run dont-waste collect after using an enabled agent.`,
+    );
 }
 
 async function runStatus(options: CommonOptions): Promise<void> {
   const paths = getDataPaths();
   const config = await readConfig(paths);
   const diagnostics = await detectAgents(context([], true));
-  const adapterDetections = await Promise.all(Object.values(createAdapters()).map((adapter) => adapter.detect(context([], true))));
+  const adapterDetections = await Promise.all(
+    Object.values(createAdapters()).map((adapter) =>
+      adapter.detect(context([], true)),
+    ),
+  );
   result({ config, agents: diagnostics, tools: adapterDetections }, options);
 }
 
@@ -368,21 +784,55 @@ async function runDoctor(options: CommonOptions): Promise<void> {
   for (const tool of toolIds) {
     const entry = configured.find((item) => item.tool === tool);
     if (!entry) {
-      checks.push({ tool, status: "skipped", reason: "not enabled in Don’t Waste config", checks: [] });
+      checks.push({
+        tool,
+        status: "skipped",
+        reason: "not enabled in Don’t Waste config",
+        checks: [],
+      });
       continue;
     }
-    const toolChecks = await adapters[tool].verify(entry.selection, context(entry.agents, true));
+    const toolChecks = await adapters[tool].verify(
+      entry.selection,
+      context(entry.agents, true),
+    );
     const failed = toolChecks.some((check) => check.status === "fail");
     const warned = toolChecks.some((check) => check.status === "warn");
-    checks.push({ tool, status: failed ? "fail" : warned ? "warn" : "pass", selection: entry.selection, agents: entry.agents, checks: toolChecks });
+    checks.push({
+      tool,
+      status: failed ? "fail" : warned ? "warn" : "pass",
+      selection: entry.selection,
+      agents: entry.agents,
+      checks: toolChecks,
+    });
   }
-  const database = await TelemetryStore.open(paths); database.close();
-  const overall = checks.some((item) => item.status === "fail") ? "fail" : checks.some((item) => item.status === "warn") ? "warn" : "pass";
-  result({ overall, checks, database: { status: "pass", path: paths.database } }, options);
+  const database = await TelemetryStore.open(paths);
+  database.close();
+  const overall = checks.some((item) => item.status === "fail")
+    ? "fail"
+    : checks.some((item) => item.status === "warn")
+      ? "warn"
+      : "pass";
+  result(
+    { overall, checks, database: { status: "pass", path: paths.database } },
+    options,
+  );
 }
 
 async function runCollect(options: CommonOptions): Promise<void> {
-  if (options.dryRun) return result({ dryRun: true, sources: ["rtk gain", "headroom perf", "caveman explicit stats file", "ponytail (unavailable)"] }, options);
+  if (options.dryRun)
+    return result(
+      {
+        dryRun: true,
+        sources: [
+          "rtk gain",
+          "headroom perf",
+          "caveman explicit stats file",
+          "ponytail (unavailable)",
+        ],
+      },
+      options,
+    );
   result(await collect(), options);
 }
 
@@ -400,7 +850,9 @@ async function runDashboard(options: DashboardOptions): Promise<void> {
   });
   const ready = formatDashboardReady(dashboard.url, Boolean(staticDir));
   if (options.json) {
-    process.stdout.write(`${JSON.stringify({ url: dashboard.url, staticAssets: Boolean(staticDir) }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ url: dashboard.url, staticAssets: Boolean(staticDir) }, null, 2)}\n`,
+    );
   } else {
     note(ready, "Dashboard");
     process.stdout.write(`${dashboard.url}\n`);
@@ -415,33 +867,77 @@ async function runDashboard(options: DashboardOptions): Promise<void> {
       if (!options.json) console.error(`Background collect failed: ${message}`);
     });
   }
-  const close = async () => { await dashboard.close(); process.exit(0); };
-  process.once("SIGINT", () => void close()); process.once("SIGTERM", () => void close());
+  const close = async () => {
+    await dashboard.close();
+    process.exit(0);
+  };
+  process.once("SIGINT", () => void close());
+  process.once("SIGTERM", () => void close());
   await new Promise<void>(() => undefined);
 }
 
 async function runRollback(id: string, options: CommonOptions): Promise<void> {
   if (options.dryRun) return result({ dryRun: true, operation: id }, options);
   requireConfirmation(options);
-  if (!options.yes && process.stdin.isTTY && !checked(await confirm({ message: `Restore snapshot ${id}?`, initialValue: false }))) return;
+  if (
+    !options.yes &&
+    process.stdin.isTTY &&
+    !checked(
+      await confirm({
+        message: `Restore snapshot ${id}?`,
+        initialValue: false,
+      }),
+    )
+  )
+    return;
   const operation = await restoreOperation(getDataPaths(), id);
   result({ restored: id, operation }, options);
 }
 
 async function runUninstall(options: CommonOptions): Promise<void> {
-  if (options.dryRun) return result({ dryRun: true, action: "snapshot altered paths, remove marker-owned files, clear Don’t Waste integrations; telemetry stays local; use rollback <id> for a specific snapshot" }, options);
+  if (options.dryRun)
+    return result(
+      {
+        dryRun: true,
+        action:
+          "snapshot altered paths, remove marker-owned files, clear Don’t Waste integrations; telemetry stays local; use rollback <id> for a specific snapshot",
+      },
+      options,
+    );
   requireConfirmation(options);
-  if (!options.yes && process.stdin.isTTY && !checked(await confirm({ message: "Remove managed integrations and clear Don’t Waste activation state?", initialValue: false }))) return;
+  if (
+    !options.yes &&
+    process.stdin.isTTY &&
+    !checked(
+      await confirm({
+        message:
+          "Remove managed integrations and clear Don’t Waste activation state?",
+        initialValue: false,
+      }),
+    )
+  )
+    return;
   const paths = getDataPaths();
   const config = await readConfig(paths);
   const selectedAgents = Object.keys(config.integrations) as AgentId[];
   const adapters = createAdapters();
   const ctx = context(selectedAgents, false);
-  const affected = [...new Set([
-    paths.config,
-    ...(await Promise.all(toolIds.map((tool) => adapters[tool].uninstallPaths(ctx)))).flat(),
-  ])];
-  const operation = await createOperation(paths, "uninstall", { selectedAgents, affected }, affected);
+  const affected = [
+    ...new Set([
+      paths.config,
+      ...(
+        await Promise.all(
+          toolIds.map((tool) => adapters[tool].uninstallPaths(ctx)),
+        )
+      ).flat(),
+    ]),
+  ];
+  const operation = await createOperation(
+    paths,
+    "uninstall",
+    { selectedAgents, affected },
+    affected,
+  );
   await updateOperation(paths, operation.id, "running");
   const adapterResults = [];
   for (const tool of toolIds) {
@@ -450,44 +946,71 @@ async function runUninstall(options: CommonOptions): Promise<void> {
   const failed = adapterResults.filter((item) => !item.succeeded);
   if (failed.length) {
     await restoreOperation(paths, operation.id);
-    await updateOperation(paths, operation.id, "failed", failed.map((item) => `${item.tool}: ${item.errors.join("; ")}`).join(" | "));
-    result({
-      operation: operation.id,
-      succeeded: false,
-      adapters: adapterResults,
-      restoredSnapshot: true,
-      note: "Uninstall failed; previous files were restored from the operation snapshot.",
-    }, options);
+    await updateOperation(
+      paths,
+      operation.id,
+      "failed",
+      failed
+        .map((item) => `${item.tool}: ${item.errors.join("; ")}`)
+        .join(" | "),
+    );
+    result(
+      {
+        operation: operation.id,
+        succeeded: false,
+        adapters: adapterResults,
+        restoredSnapshot: true,
+        note: "Uninstall failed; previous files were restored from the operation snapshot.",
+      },
+      options,
+    );
     process.exitCode = 1;
     return;
   }
-  await writeConfig(paths, { ...config, integrations: {}, profile: "install-only" });
+  await writeConfig(paths, {
+    ...config,
+    integrations: {},
+    profile: "install-only",
+  });
   await updateOperation(paths, operation.id, "succeeded");
-  result({
-    operation: operation.id,
-    succeeded: true,
-    adapters: adapterResults,
-    clearedIntegrations: selectedAgents,
-    affectedPaths: affected,
-    telemetry: "preserved",
-    note: "Only marker-owned Don’t Waste files were removed. Use dont-waste rollback <id> if you need a specific pre-init file state.",
-  }, options);
+  result(
+    {
+      operation: operation.id,
+      succeeded: true,
+      adapters: adapterResults,
+      clearedIntegrations: selectedAgents,
+      affectedPaths: affected,
+      telemetry: "preserved",
+      note: "Only marker-owned Don’t Waste files were removed. Use dont-waste rollback <id> if you need a specific pre-init file state.",
+    },
+    options,
+  );
 }
 
 async function runMainMenu(): Promise<void> {
   intro("Don’t Waste");
-  note("Use arrow keys to choose an action. Existing CLI commands still work directly.", "Terminal UI");
+  note(
+    "Use arrow keys to choose an action. Existing CLI commands still work directly.",
+    "Terminal UI",
+  );
   for (;;) {
-    const action = checked(await select({
-      message: "What do you want to do?",
-      options: mainMenuOptions,
-    })) as MenuAction;
+    const action = checked(
+      await select({
+        message: "What do you want to do?",
+        options: mainMenuOptions,
+      }),
+    ) as MenuAction;
     if (action === "exit") {
       outro("Bye.");
       return;
     }
     if (action === "dashboard") {
-      const openBrowser = checked(await confirm({ message: "Open the dashboard in your browser?", initialValue: true }));
+      const openBrowser = checked(
+        await confirm({
+          message: "Open the dashboard in your browser?",
+          initialValue: true,
+        }),
+      );
       await runDashboard({ open: openBrowser });
       return;
     }
@@ -506,52 +1029,105 @@ async function runMainMenu(): Promise<void> {
 }
 
 const program = new Command();
-program.name("dont-waste").description("Local-first token reduction orchestrator for coding agents").version(packageVersion);
+program
+  .name("dont-waste")
+  .description("Local-first token reduction orchestrator for coding agents")
+  .version(packageVersion);
 
-program.command("menu").description("open the interactive terminal menu").action(async () => {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("The interactive menu needs a terminal. Use dont-waste --help for direct commands.");
-  }
-  await runMainMenu();
-});
+program
+  .command("menu")
+  .description("open the interactive terminal menu")
+  .action(async () => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new Error(
+        "The interactive menu needs a terminal. Use dont-waste --help for direct commands.",
+      );
+    }
+    await runMainMenu();
+  });
 
-addCommonOptions(program.command("init").description("detect, plan, install, and validate integrations").option("--profile <profile>", "balanced, maximum-savings, custom, or install-only").option("--channel <channel>", "pinned or latest")).action(async (options: InitOptions) => {
+addCommonOptions(
+  program
+    .command("init")
+    .description("detect, plan, install, and validate integrations")
+    .option(
+      "--profile <profile>",
+      "balanced, maximum-savings, custom, or install-only",
+    )
+    .option("--channel <channel>", "pinned or latest"),
+).action(async (options: InitOptions) => {
   await runInit(options);
 });
 
-addCommonOptions(program.command("status").description("show configured tools, agents, profile, and health")).action(async (options: CommonOptions) => {
+addCommonOptions(
+  program
+    .command("status")
+    .description("show configured tools, agents, profile, and health"),
+).action(async (options: CommonOptions) => {
   await runStatus(options);
 });
 
-addCommonOptions(program.command("doctor").description("revalidate binaries, PATH, database, and integrations")).action(async (options: CommonOptions) => {
+addCommonOptions(
+  program
+    .command("doctor")
+    .description("revalidate binaries, PATH, database, and integrations"),
+).action(async (options: CommonOptions) => {
   await runDoctor(options);
 });
 
-addCommonOptions(program.command("collect").description("import available local metrics from enabled upstream tools")).action(async (options: CommonOptions) => {
+addCommonOptions(
+  program
+    .command("collect")
+    .description("import available local metrics from enabled upstream tools"),
+).action(async (options: CommonOptions) => {
   await runCollect(options);
 });
 
-addCommonOptions(program.command("dashboard").description("collect metrics and start the local dashboard").option("--port <port>", "bind this local port").option("--no-open", "do not open the browser")).action(async (options: DashboardOptions) => {
+addCommonOptions(
+  program
+    .command("dashboard")
+    .description("collect metrics and start the local dashboard")
+    .option("--port <port>", "bind this local port")
+    .option("--no-open", "do not open the browser"),
+).action(async (options: DashboardOptions) => {
   await runDashboard(options);
 });
 
-addCommonOptions(program.command("update").description("check official upstream releases and apply an idempotent upgrade plan")).action(async (options: CommonOptions) => {
+addCommonOptions(
+  program
+    .command("update")
+    .description(
+      "check official upstream releases and apply an idempotent upgrade plan",
+    ),
+).action(async (options: CommonOptions) => {
   await runUpdate(options);
 });
 
-addCommonOptions(program.command("rollback <id>").description("restore the configuration snapshot from an operation")).action(async (id: string, options: CommonOptions) => {
+addCommonOptions(
+  program
+    .command("rollback <id>")
+    .description("restore the configuration snapshot from an operation"),
+).action(async (id: string, options: CommonOptions) => {
   await runRollback(id, options);
 });
 
-addCommonOptions(program.command("uninstall").description("remove Don’t Waste managed integrations without deleting upstream tools adopted from the user")).action(async (options: CommonOptions) => {
+addCommonOptions(
+  program
+    .command("uninstall")
+    .description(
+      "remove Don’t Waste managed integrations without deleting upstream tools adopted from the user",
+    ),
+).action(async (options: CommonOptions) => {
   await runUninstall(options);
 });
 
 async function main(): Promise<void> {
-  if (shouldOpenMainMenu(process.argv, {
-    stdinIsTTY: Boolean(process.stdin.isTTY),
-    stdoutIsTTY: Boolean(process.stdout.isTTY),
-  })) {
+  if (
+    shouldOpenMainMenu(process.argv, {
+      stdinIsTTY: Boolean(process.stdin.isTTY),
+      stdoutIsTTY: Boolean(process.stdout.isTTY),
+    })
+  ) {
     await runMainMenu();
     return;
   }
@@ -564,6 +1140,14 @@ main().catch((error: unknown) => {
 });
 
 export { collect, makePlan, runMainMenu };
-export { compareUpdates, normalizeVersion, toolsNeedingUpdate } from "./updates.js";
+export {
+  compareUpdates,
+  normalizeVersion,
+  toolsNeedingUpdate,
+} from "./updates.js";
 export { mainMenuOptions, shouldOpenMainMenu } from "./menu.js";
-export { browserOpenCommand, formatDashboardReady, resolveDashboardStaticDir } from "./dashboard-launch.js";
+export {
+  browserOpenCommand,
+  formatDashboardReady,
+  resolveDashboardStaticDir,
+} from "./dashboard-launch.js";

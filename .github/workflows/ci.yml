@@ -13,12 +13,35 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-      - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: CLI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          node apps/cli/dist/main.js --help | tee /tmp/dont-waste-help.txt
+          grep -E '(menu|dashboard|init|status)' /tmp/dont-waste-help.txt
+          DONT_WASTE_DATA_DIR="$(mktemp -d)" node apps/cli/dist/main.js init --dry-run --json > /tmp/dont-waste-init.json
+          DONT_WASTE_DATA_DIR="$(mktemp -d)" node apps/cli/dist/main.js update --dry-run --json > /tmp/dont-waste-update.json
+          DONT_WASTE_DATA_DIR="$(mktemp -d)" node apps/cli/dist/main.js collect --dry-run --json > /tmp/dont-waste-collect.json
+          node -e "JSON.parse(require('fs').readFileSync('/tmp/dont-waste-init.json','utf8')); JSON.parse(require('fs').readFileSync('/tmp/dont-waste-update.json','utf8')); JSON.parse(require('fs').readFileSync('/tmp/dont-waste-collect.json','utf8'));"
+          DONT_WASTE_DATA_DIR="$(mktemp -d)" node apps/cli/dist/main.js dashboard --port 4317 --no-open --dry-run --json > /tmp/dont-waste-dash.json &
+          DASH_PID=$!
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:4317/api/overview" > /tmp/dont-waste-overview.json; then break; fi
+            sleep 1
+          done
+          kill "$DASH_PID" 2>/dev/null || true
+          wait "$DASH_PID" 2>/dev/null || true
+          test -s /tmp/dont-waste-dash.json
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/dont-waste-dash.json','utf8')); if(!d.url) process.exit(1); JSON.parse(require('fs').readFileSync('/tmp/dont-waste-overview.json','utf8'));"

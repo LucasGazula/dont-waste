@@ -9,11 +9,24 @@ export type ConfiguredTool = {
 };
 
 /** Resolve enabled tool selections from saved Don’t Waste config for doctor/health. */
-export function configuredToolsFromConfig(config: DontWasteConfig): ConfiguredTool[] {
+export function configuredToolsFromConfig(
+  config: DontWasteConfig,
+): ConfiguredTool[] {
   const byTool = new Map<ToolId, ConfiguredTool>();
-  for (const [agent, tools] of Object.entries(config.integrations) as Array<[AgentId, DontWasteConfig["integrations"][AgentId]]>) {
+  for (const [agent, tools] of Object.entries(config.integrations) as Array<
+    [AgentId, DontWasteConfig["integrations"][AgentId]]
+  >) {
     if (!tools) continue;
-    for (const [tool, settings] of Object.entries(tools) as Array<[ToolId, { mode: ToolSelection["mode"]; enabled: boolean; features: Record<string, boolean> }]>) {
+    for (const [tool, settings] of Object.entries(tools) as Array<
+      [
+        ToolId,
+        {
+          mode: ToolSelection["mode"];
+          enabled: boolean;
+          features: Record<string, boolean>;
+        },
+      ]
+    >) {
       if (!settings?.enabled || settings.mode === "off") continue;
       const current = byTool.get(tool);
       if (current) {

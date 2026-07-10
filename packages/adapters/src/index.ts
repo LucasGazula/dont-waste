@@ -15,5 +15,10 @@ import { RtkAdapter } from "./rtk.js";
 import type { ToolAdapter } from "./types.js";
 
 export function createAdapters(): Record<ToolId, ToolAdapter> {
-  return { headroom: new HeadroomAdapter(), rtk: new RtkAdapter(), caveman: new CavemanAdapter(), ponytail: new PonytailAdapter() };
+  return {
+    headroom: new HeadroomAdapter(),
+    rtk: new RtkAdapter(),
+    caveman: new CavemanAdapter(),
+    ponytail: new PonytailAdapter(),
+  };
 }

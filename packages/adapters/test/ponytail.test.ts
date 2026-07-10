@@ -16,7 +16,12 @@ describe("ponytail mode persistence", () => {
   it("writes the selected mode into config.json during install", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
     const adapter = new PonytailAdapter();
-    const context = { platform: "linux" as const, home, selectedAgents: ["opencode" as const], dryRun: false };
+    const context = {
+      platform: "linux" as const,
+      home,
+      selectedAgents: ["opencode" as const],
+      dryRun: false,
+    };
     const selection = { mode: "ultra" as const, features: {} };
     const plan = await adapter.planInstall(selection, context);
     expect(plan.selection.mode).toBe("ultra");
@@ -26,10 +31,14 @@ describe("ponytail mode persistence", () => {
     expect(result.succeeded).toBe(true);
 
     const configPath = path.join(home, ".config", "ponytail", "config.json");
-    const config = JSON.parse(await readFile(configPath, "utf8")) as { defaultMode: string };
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      defaultMode: string;
+    };
     expect(config.defaultMode).toBe("ultra");
 
     const checks = await adapter.verify(selection, context);
-    expect(checks.find((check) => check.id === "ponytail-mode")).toMatchObject({ status: "pass" });
+    expect(checks.find((check) => check.id === "ponytail-mode")).toMatchObject({
+      status: "pass",
+    });
   });
 });

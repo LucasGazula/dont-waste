@@ -1,6 +1,9 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
-import { configuredToolsFromConfig, createAdapters } from "@dont-waste/adapters";
+import {
+  configuredToolsFromConfig,
+  createAdapters,
+} from "@dont-waste/adapters";
 import { agents, capabilities, upstream } from "@dont-waste/catalog";
 import { readConfig, type DataPaths } from "@dont-waste/core";
 import { TelemetryStore } from "@dont-waste/telemetry";
@@ -13,30 +16,47 @@ export { aggregateDaily, aggregateWeekly } from "./aggregation.js";
 export { costTotals, filterEvents, overlapGroups } from "./filters.js";
 export { dashboardOverview } from "./overview.js";
 
-export type DashboardServer = { app: FastifyInstance; url: string; close(): Promise<void> };
+export type DashboardServer = {
+  app: FastifyInstance;
+  url: string;
+  close(): Promise<void>;
+};
 export type DashboardApp = { app: FastifyInstance; close(): Promise<void> };
 
-async function existingDirectory(directory: string | undefined): Promise<string | undefined> {
+async function existingDirectory(
+  directory: string | undefined,
+): Promise<string | undefined> {
   if (!directory) return undefined;
   const absolute = path.resolve(directory);
-  try { await access(absolute); return absolute; } catch { return undefined; }
+  try {
+    await access(absolute);
+    return absolute;
+  } catch {
+    return undefined;
+  }
 }
 
-export async function createDashboardApp(paths: DataPaths, options: { staticDir?: string | undefined } = {}): Promise<DashboardApp> {
+export async function createDashboardApp(
+  paths: DataPaths,
+  options: { staticDir?: string | undefined } = {},
+): Promise<DashboardApp> {
   const app = fastify({ logger: false });
   const store = await TelemetryStore.open(paths);
   const staticDir = await existingDirectory(options.staticDir);
-  if (staticDir) await app.register(fastifyStatic, { root: staticDir, wildcard: false });
+  if (staticDir)
+    await app.register(fastifyStatic, { root: staticDir, wildcard: false });
 
-  app.get("/api/overview", async () => dashboardOverview(
-    await readConfig(paths),
-    store.listEvents(),
-    { projects: store.listProjects(), sessions: store.listSessions(50) },
-  ));
+  app.get("/api/overview", async () =>
+    dashboardOverview(await readConfig(paths), store.listEvents(), {
+      projects: store.listProjects(),
+      sessions: store.listSessions(50),
+    }),
+  );
   app.get("/api/events", async (request) => {
     const query = request.query as EventFilters & { limit?: string };
     const parsed = Number(query.limit);
-    const limit = Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 1000) : 500;
+    const limit =
+      Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 1000) : 500;
     const filters: EventFilters = {
       ...(query.confidence ? { confidence: query.confidence } : {}),
       ...(query.tool ? { tool: query.tool } : {}),
@@ -50,7 +70,8 @@ export async function createDashboardApp(paths: DataPaths, options: { staticDir?
   app.get("/api/sessions", async (request) => {
     const query = request.query as { limit?: string };
     const parsed = Number(query.limit);
-    const limit = Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 500) : 100;
+    const limit =
+      Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 500) : 100;
     return { sessions: store.listSessions(limit) };
   });
   app.get("/api/config", async () => {
@@ -59,42 +80,84 @@ export async function createDashboardApp(paths: DataPaths, options: { staticDir?
       profile: config.profile,
       updateChannel: config.updateChannel,
       integrations: config.integrations,
-      projects: config.projects.map((project) => ({ alias: project.alias ?? "Local project", path: config.displayProjectPaths ? project.path : undefined })),
+      projects: config.projects.map((project) => ({
+        alias: project.alias ?? "Local project",
+        path: config.displayProjectPaths ? project.path : undefined,
+      })),
     };
   });
-  app.get("/api/tools", async () => ({ tools: upstream, agents, capabilities }));
+  app.get("/api/tools", async () => ({
+    tools: upstream,
+    agents,
+    capabilities,
+  }));
   app.get("/api/health", async () => {
     const config = await readConfig(paths);
     const adapters = createAdapters();
     const configured = configuredToolsFromConfig(config);
-    const tools = await Promise.all(Object.values(adapters).map(async (adapter) => {
-      const entry = configured.find((item) => item.tool === adapter.id);
-      const context = {
-        platform: process.platform,
-        home: process.env.HOME ?? process.env.USERPROFILE ?? "",
-        selectedAgents: entry?.agents ?? [],
-        dryRun: true,
-      } as const;
-      const detection = await adapter.detect(context);
-      if (!entry) {
-        return { tool: adapter.id, detection, status: "skipped", reason: "not enabled in Don’t Waste config", checks: [] };
-      }
-      const checks = await adapter.verify(entry.selection, context);
-      return { tool: adapter.id, detection, status: "checked", selection: entry.selection, agents: entry.agents, checks };
-    }));
+    const tools = await Promise.all(
+      Object.values(adapters).map(async (adapter) => {
+        const entry = configured.find((item) => item.tool === adapter.id);
+        const context = {
+          platform: process.platform,
+          home: process.env.HOME ?? process.env.USERPROFILE ?? "",
+          selectedAgents: entry?.agents ?? [],
+          dryRun: true,
+        } as const;
+        const detection = await adapter.detect(context);
+        if (!entry) {
+          return {
+            tool: adapter.id,
+            detection,
+            status: "skipped",
+            reason: "not enabled in Don’t Waste config",
+            checks: [],
+          };
+        }
+        const checks = await adapter.verify(entry.selection, context);
+        return {
+          tool: adapter.id,
+          detection,
+          status: "checked",
+          selection: entry.selection,
+          agents: entry.agents,
+          checks,
+        };
+      }),
+    );
     return { tools };
   });
   if (!staticDir) {
     app.get("/", async (_request, reply) => {
-      return reply.type("text/html").send("<!doctype html><title>Don't Waste</title><main><h1>Don't Waste dashboard API</h1><p>Build the dashboard package to serve the local SPA.</p></main>");
+      return reply
+        .type("text/html")
+        .send(
+          "<!doctype html><title>Don't Waste</title><main><h1>Don't Waste dashboard API</h1><p>Build the dashboard package to serve the local SPA.</p></main>",
+        );
     });
   }
 
-  return { app, close: async () => { store.close(); await app.close(); } };
+  return {
+    app,
+    close: async () => {
+      store.close();
+      await app.close();
+    },
+  };
 }
 
-export async function createDashboardServer(paths: DataPaths, options: { port?: number | undefined; staticDir?: string | undefined; host?: string | undefined } = {}): Promise<DashboardServer> {
+export async function createDashboardServer(
+  paths: DataPaths,
+  options: {
+    port?: number | undefined;
+    staticDir?: string | undefined;
+    host?: string | undefined;
+  } = {},
+): Promise<DashboardServer> {
   const dashboard = await createDashboardApp(paths, options);
-  const address = await dashboard.app.listen({ host: options.host ?? "127.0.0.1", port: options.port ?? 0 });
+  const address = await dashboard.app.listen({
+    host: options.host ?? "127.0.0.1",
+    port: options.port ?? 0,
+  });
   return { ...dashboard, url: address };
 }

@@ -1,7 +1,13 @@
 export const agentConfigFixtures = {
-  codex: "model = \"gpt-5\"\n[mcp_servers.existing]\ncommand = \"example\"\n",
-  "claude-code": JSON.stringify({ hooks: {}, permissions: { allow: ["Read"] } }),
-  "gemini-cli": JSON.stringify({ theme: "dark", mcpServers: { existing: { command: "example" } } }),
+  codex: 'model = "gpt-5"\n[mcp_servers.existing]\ncommand = "example"\n',
+  "claude-code": JSON.stringify({
+    hooks: {},
+    permissions: { allow: ["Read"] },
+  }),
+  "gemini-cli": JSON.stringify({
+    theme: "dark",
+    mcpServers: { existing: { command: "example" } },
+  }),
   "copilot-cli": JSON.stringify({ trustedFolders: ["~/work"] }),
   "antigravity-cli": JSON.stringify({ extensions: [] }),
   opencode: JSON.stringify({ plugin: ["existing-plugin"] }),
@@ -54,8 +60,21 @@ export const headroomPerfFixture = JSON.stringify({
 /** Output-savings style events are estimated unless holdout/measured is set. */
 export const headroomOutputSavingsFixture = JSON.stringify({
   events: [
-    { timestamp: "2026-07-09T12:03:00.000Z", type: "output-savings", tokens_before: 800, tokens_after: 500, measured: false },
-    { timestamp: "2026-07-09T12:04:00.000Z", type: "output-savings", tokens_before: 400, tokens_after: 200, measured: true, holdout: true },
+    {
+      timestamp: "2026-07-09T12:03:00.000Z",
+      type: "output-savings",
+      tokens_before: 800,
+      tokens_after: 500,
+      measured: false,
+    },
+    {
+      timestamp: "2026-07-09T12:04:00.000Z",
+      type: "output-savings",
+      tokens_before: 400,
+      tokens_after: 200,
+      measured: true,
+      holdout: true,
+    },
   ],
 });
 

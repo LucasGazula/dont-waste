@@ -7,7 +7,12 @@ import {
   privacyHostileFixture,
   rtkGainFixture,
 } from "@dont-waste/test-fixtures";
-import { importCavemanStats, importHeadroomJson, importRtkJson, sanitizeMetricRecord } from "../src/importers.js";
+import {
+  importCavemanStats,
+  importHeadroomJson,
+  importRtkJson,
+  sanitizeMetricRecord,
+} from "../src/importers.js";
 
 describe("upstream metric importers", () => {
   it("maps RTK token observations with project/agent/session/model/cost", () => {
@@ -42,8 +47,15 @@ describe("upstream metric importers", () => {
 
   it("treats Headroom output-savings as estimated unless measured/holdout", () => {
     const events = importHeadroomJson(headroomOutputSavingsFixture);
-    expect(events[0]).toMatchObject({ metricType: "estimated-output", confidence: "estimated", tokensSaved: 300 });
-    expect(events[1]).toMatchObject({ confidence: "measured", tokensSaved: 200 });
+    expect(events[0]).toMatchObject({
+      metricType: "estimated-output",
+      confidence: "estimated",
+      tokensSaved: 300,
+    });
+    expect(events[1]).toMatchObject({
+      confidence: "measured",
+      tokensSaved: 200,
+    });
   });
 
   it("imports benchmark-reference as unavailable and non-measured", () => {
@@ -64,7 +76,9 @@ describe("upstream metric importers", () => {
   });
 
   it("strips prompts/outputs before import and never stores them in evidence", () => {
-    const cleaned = sanitizeMetricRecord(JSON.parse(privacyHostileFixture).events[0]);
+    const cleaned = sanitizeMetricRecord(
+      JSON.parse(privacyHostileFixture).events[0],
+    );
     expect(cleaned.prompt).toBeUndefined();
     expect(cleaned.output).toBeUndefined();
     expect(cleaned.conversation).toBeUndefined();

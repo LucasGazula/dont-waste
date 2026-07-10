@@ -13,8 +13,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "prettier --check .",
-    "format": "prettier --write ."
+    "lint": "node --max-old-space-size=8192 node_modules/prettier/bin/prettier.cjs --check .",
+    "format": "node --max-old-space-size=8192 node_modules/prettier/bin/prettier.cjs --write ."
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

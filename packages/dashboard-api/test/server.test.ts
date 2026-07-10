@@ -17,8 +17,14 @@ describe("createDashboardServer", () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "dont-waste-api-"));
     process.env.DONT_WASTE_DATA_DIR = dataDir;
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "dont-waste-spa-"));
-    await writeFile(path.join(staticDir, "index.html"), "<!doctype html><title>spa</title>");
-    const server = await createDashboardServer(getDataPaths(), { port: 0, staticDir });
+    await writeFile(
+      path.join(staticDir, "index.html"),
+      "<!doctype html><title>spa</title>",
+    );
+    const server = await createDashboardServer(getDataPaths(), {
+      port: 0,
+      staticDir,
+    });
     servers.push(server);
     const home = await fetch(server.url);
     expect(home.status).toBe(200);
@@ -33,7 +39,10 @@ describe("createDashboardServer", () => {
     process.env.DONT_WASTE_DATA_DIR = dataDir;
     const missing = path.join(dataDir, "no-spa");
     await mkdir(dataDir, { recursive: true });
-    const server = await createDashboardServer(getDataPaths(), { port: 0, staticDir: missing });
+    const server = await createDashboardServer(getDataPaths(), {
+      port: 0,
+      staticDir: missing,
+    });
     servers.push(server);
     const home = await fetch(server.url);
     expect(home.status).toBe(200);
@@ -43,14 +52,22 @@ describe("createDashboardServer", () => {
   it("accepts a relative staticDir by resolving it to an absolute path", async () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "dont-waste-api-"));
     process.env.DONT_WASTE_DATA_DIR = dataDir;
-    const relativeRoot = await mkdtemp(path.join(os.tmpdir(), "dont-waste-rel-"));
+    const relativeRoot = await mkdtemp(
+      path.join(os.tmpdir(), "dont-waste-rel-"),
+    );
     const nested = path.join(relativeRoot, "spa");
     await mkdir(nested);
-    await writeFile(path.join(nested, "index.html"), "<!doctype html><title>rel</title>");
+    await writeFile(
+      path.join(nested, "index.html"),
+      "<!doctype html><title>rel</title>",
+    );
     const previous = process.cwd();
     process.chdir(relativeRoot);
     try {
-      const server = await createDashboardServer(getDataPaths(), { port: 0, staticDir: "spa" });
+      const server = await createDashboardServer(getDataPaths(), {
+        port: 0,
+        staticDir: "spa",
+      });
       servers.push(server);
       const home = await fetch(server.url);
       expect(home.status).toBe(200);

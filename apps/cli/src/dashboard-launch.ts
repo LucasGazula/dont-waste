@@ -16,7 +16,10 @@ export function resolveDashboardStaticDir(options: {
   return candidates.find((candidate) => options.existsSync(candidate));
 }
 
-export function formatDashboardReady(url: string, staticAssets: boolean): string {
+export function formatDashboardReady(
+  url: string,
+  staticAssets: boolean,
+): string {
   const lines = [
     `Dashboard listening at ${url}`,
     staticAssets
@@ -27,8 +30,12 @@ export function formatDashboardReady(url: string, staticAssets: boolean): string
   return lines.join("\n");
 }
 
-export function browserOpenCommand(platform: NodeJS.Platform, url: string): BrowserOpenCommand {
-  if (platform === "win32") return { command: "cmd", args: ["/c", "start", "", url] };
+export function browserOpenCommand(
+  platform: NodeJS.Platform,
+  url: string,
+): BrowserOpenCommand {
+  if (platform === "win32")
+    return { command: "cmd", args: ["/c", "start", "", url] };
   if (platform === "darwin") return { command: "open", args: [url] };
   return { command: "xdg-open", args: [url] };
 }

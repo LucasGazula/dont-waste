@@ -15,13 +15,41 @@ export type MenuOption = {
 };
 
 export const mainMenuOptions: MenuOption[] = [
-  { value: "init", label: "Setup", hint: "detect agents, choose tools, apply a plan" },
-  { value: "status", label: "Status", hint: "configured tools, agents, and health" },
-  { value: "doctor", label: "Doctor", hint: "revalidate binaries, PATH, and integrations" },
-  { value: "collect", label: "Collect metrics", hint: "import local upstream measurements" },
-  { value: "dashboard", label: "Open dashboard", hint: "start the local web UI and print its URL" },
-  { value: "update", label: "Check updates", hint: "compare installed tools with GitHub releases" },
-  { value: "uninstall", label: "Uninstall", hint: "remove managed integrations; keep upstream tools" },
+  {
+    value: "init",
+    label: "Setup",
+    hint: "detect agents, choose tools, apply a plan",
+  },
+  {
+    value: "status",
+    label: "Status",
+    hint: "configured tools, agents, and health",
+  },
+  {
+    value: "doctor",
+    label: "Doctor",
+    hint: "revalidate binaries, PATH, and integrations",
+  },
+  {
+    value: "collect",
+    label: "Collect metrics",
+    hint: "import local upstream measurements",
+  },
+  {
+    value: "dashboard",
+    label: "Open dashboard",
+    hint: "start the local web UI and print its URL",
+  },
+  {
+    value: "update",
+    label: "Check updates",
+    hint: "compare installed tools with GitHub releases",
+  },
+  {
+    value: "uninstall",
+    label: "Uninstall",
+    hint: "remove managed integrations; keep upstream tools",
+  },
   { value: "exit", label: "Exit", hint: "leave the menu" },
 ];
 

@@ -21,21 +21,41 @@ afterEach(() => {
 
 describe("telemetry projects sessions and cursors", () => {
   it("upserts projects/sessions from imported events and records import cursors", async () => {
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), "dont-waste-telemetry-"));
+    const dataDir = await mkdtemp(
+      path.join(os.tmpdir(), "dont-waste-telemetry-"),
+    );
     process.env.DONT_WASTE_DATA_DIR = dataDir;
     const store = await TelemetryStore.open(getDataPaths());
     store.upsertProject("/work/demo", "Demo");
-    const events = [...importRtkJson(rtkGainFixture), ...importHeadroomJson(headroomPerfFixture)];
+    const events = [
+      ...importRtkJson(rtkGainFixture),
+      ...importHeadroomJson(headroomPerfFixture),
+    ];
     const inserted = store.insertEvents(events);
     expect(inserted).toBeGreaterThan(0);
-    expect(store.listProjects()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "/work/demo", alias: "Demo" }),
-    ]));
-    expect(store.listSessions().some((session) => session.id === "sess-rtk-1" && session.agent === "codex")).toBe(true);
-    const cursor = events.map((event) => event.occurredAt).sort().at(-1)!;
+    expect(store.listProjects()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "/work/demo", alias: "Demo" }),
+      ]),
+    );
+    expect(
+      store
+        .listSessions()
+        .some(
+          (session) => session.id === "sess-rtk-1" && session.agent === "codex",
+        ),
+    ).toBe(true);
+    const cursor = events
+      .map((event) => event.occurredAt)
+      .sort()
+      .at(-1)!;
     store.recordImport("rtk gain", inserted, undefined, cursor);
     expect(store.latestImportCursor("rtk gain")).toBe(cursor);
-    expect(store.recentImports()[0]).toMatchObject({ source: "rtk gain", cursor, error: null });
+    expect(store.recentImports()[0]).toMatchObject({
+      source: "rtk gain",
+      cursor,
+      error: null,
+    });
     store.close();
   });
 
@@ -46,7 +66,9 @@ describe("telemetry projects sessions and cursors", () => {
     ];
     const summary = aggregateEvents(events);
     expect(summary.measuredSaved).toBe(1200);
-    expect(events.find((event) => event.metricType === "benchmark-reference")?.model).toBe("benchmark-suite");
+    expect(
+      events.find((event) => event.metricType === "benchmark-reference")?.model,
+    ).toBe("benchmark-suite");
     expect(events[0]?.costBefore).toBe(0.02);
   });
 });

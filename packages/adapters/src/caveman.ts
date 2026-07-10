@@ -4,7 +4,15 @@ import type { AgentId, Mode } from "@dont-waste/catalog";
 import { importCavemanStats } from "@dont-waste/telemetry";
 import { BaseAdapter } from "./base.js";
 import { findExecutable } from "./runtime.js";
-import type { AdapterContext, DetectionResult, HealthCheck, InstallResult, MetricImportResult, OperationPlan, ToolSelection } from "./types.js";
+import type {
+  AdapterContext,
+  DetectionResult,
+  HealthCheck,
+  InstallResult,
+  MetricImportResult,
+  OperationPlan,
+  ToolSelection,
+} from "./types.js";
 
 /** Map Don’t Waste agents onto Caveman installer `--only` ids. */
 export const cavemanOnlyId: Partial<Record<AgentId, string>> = {
@@ -22,13 +30,17 @@ export function resolveCavemanMode(mode: Mode): string {
 }
 
 /** Marker files Don’t Waste owns. Never invent a default agent when none are selected (install-only). */
-export function cavemanActivePaths(context: Pick<AdapterContext, "home" | "platform" | "selectedAgents">): string[] {
+export function cavemanActivePaths(
+  context: Pick<AdapterContext, "home" | "platform" | "selectedAgents">,
+): string[] {
   const paths: string[] = [];
   if (context.selectedAgents.includes("claude-code")) {
     paths.push(path.join(context.home, ".claude", ".caveman-active"));
   }
   if (context.selectedAgents.includes("opencode")) {
-    paths.push(path.join(context.home, ".config", "opencode", ".caveman-active"));
+    paths.push(
+      path.join(context.home, ".config", "opencode", ".caveman-active"),
+    );
   }
   return paths;
 }
@@ -64,56 +76,87 @@ export class CavemanAdapter extends BaseAdapter {
       try {
         await access(file);
         markers.push(file);
-      } catch { /* absent */ }
+      } catch {
+        /* absent */
+      }
     }
     if (!markers.length) {
       return {
         id: this.id,
         detected: false,
-        warnings: [node
-          ? "Caveman is not installed (no .caveman-active markers); Node.js is available for the official installer"
-          : "Node.js 18+ is required by the official Caveman installer"],
+        warnings: [
+          node
+            ? "Caveman is not installed (no .caveman-active markers); Node.js is available for the official installer"
+            : "Node.js 18+ is required by the official Caveman installer",
+        ],
       };
     }
     return {
       id: this.id,
       detected: true,
       path: markers[0],
-      warnings: node ? [] : ["Caveman markers found but Node.js is absent from PATH"],
+      warnings: node
+        ? []
+        : ["Caveman markers found but Node.js is absent from PATH"],
     };
   }
 
-  async planInstall(selection: ToolSelection, context: AdapterContext): Promise<OperationPlan> {
-    const unsupported = context.selectedAgents.filter((agent) => !cavemanOnlyId[agent]);
+  async planInstall(
+    selection: ToolSelection,
+    context: AdapterContext,
+  ): Promise<OperationPlan> {
+    const unsupported = context.selectedAgents.filter(
+      (agent) => !cavemanOnlyId[agent],
+    );
     const mode = resolveCavemanMode(selection.mode);
     const affectedPaths = cavemanActivePaths(context);
-    const alreadyActive = (await Promise.all(affectedPaths.map(async (file) => {
-      try {
-        return (await readFile(file, "utf8")).trim().length > 0;
-      } catch { return false; }
-    }))).some(Boolean);
-    const commands = context.selectedAgents.length === 0 || alreadyActive
-      ? []
-      : [{
-          command: "npx",
-          args: installArgs(context),
-          label: "Run the official Caveman installer for selected agents",
-        }];
-    return this.basePlan(selection, context, commands, [
-      context.selectedAgents.length === 0
-        ? "install-only: Caveman binary/skills install may run, but Don’t Waste will not write agent marker files."
-        : alreadyActive
-          ? "Existing Caveman install detected; Don’t Waste will only refresh .caveman-active mode files."
-          : `Caveman mode: ${mode}. Don’t Waste writes this into .caveman-active after install.`,
-      "Caveman session savings are estimates and never enter the measured total.",
-      selection.features.statusline
-        ? "Statusline savings stay enabled (default Caveman behavior)."
-        : "To silence the Claude Code savings badge later, set CAVEMAN_STATUSLINE_SAVINGS=0.",
-      ...unsupported.map((agent) => `${agent} has no Caveman --only target yet; skipped.`),
-    ].filter(Boolean), affectedPaths);
+    const alreadyActive = (
+      await Promise.all(
+        affectedPaths.map(async (file) => {
+          try {
+            return (await readFile(file, "utf8")).trim().length > 0;
+          } catch {
+            return false;
+          }
+        }),
+      )
+    ).some(Boolean);
+    const commands =
+      context.selectedAgents.length === 0 || alreadyActive
+        ? []
+        : [
+            {
+              command: "npx",
+              args: installArgs(context),
+              label: "Run the official Caveman installer for selected agents",
+            },
+          ];
+    return this.basePlan(
+      selection,
+      context,
+      commands,
+      [
+        context.selectedAgents.length === 0
+          ? "install-only: Caveman binary/skills install may run, but Don’t Waste will not write agent marker files."
+          : alreadyActive
+            ? "Existing Caveman install detected; Don’t Waste will only refresh .caveman-active mode files."
+            : `Caveman mode: ${mode}. Don’t Waste writes this into .caveman-active after install.`,
+        "Caveman session savings are estimates and never enter the measured total.",
+        selection.features.statusline
+          ? "Statusline savings stay enabled (default Caveman behavior)."
+          : "To silence the Claude Code savings badge later, set CAVEMAN_STATUSLINE_SAVINGS=0.",
+        ...unsupported.map(
+          (agent) => `${agent} has no Caveman --only target yet; skipped.`,
+        ),
+      ].filter(Boolean),
+      affectedPaths,
+    );
   }
 
-  async install(plan: OperationPlan, context: AdapterContext): Promise<InstallResult> {
+  async install(
+    plan: OperationPlan,
+    context: AdapterContext,
+  ): Promise<InstallResult> {
     const base = await super.install(plan, context);
     if (!base.succeeded || context.dryRun) return base;
     // install-only passes empty selectedAgents — never write global/agent markers.
@@ -127,25 +170,57 @@ export class CavemanAdapter extends BaseAdapter {
     return base;
   }
 
-  async verify(selection: ToolSelection, context: AdapterContext): Promise<HealthCheck[]> {
+  async verify(
+    selection: ToolSelection,
+    context: AdapterContext,
+  ): Promise<HealthCheck[]> {
     const node = await findExecutable("node");
-    const checks: HealthCheck[] = [node
-      ? { id: "caveman-node", status: "pass", message: `Node.js ${process.versions.node} is available for Caveman hooks` }
-      : { id: "caveman-node", status: "fail", message: "Node.js is absent from PATH", remediation: "Install Node.js 18+ and rerun init." }];
+    const checks: HealthCheck[] = [
+      node
+        ? {
+            id: "caveman-node",
+            status: "pass",
+            message: `Node.js ${process.versions.node} is available for Caveman hooks`,
+          }
+        : {
+            id: "caveman-node",
+            status: "fail",
+            message: "Node.js is absent from PATH",
+            remediation: "Install Node.js 18+ and rerun init.",
+          },
+    ];
     const expected = resolveCavemanMode(selection.mode);
     const modeFiles = cavemanActivePaths(context);
     if (!modeFiles.length) {
-      checks.push({ id: "caveman-mode", status: "warn", message: "No Caveman mode file targets for the selected agents" });
+      checks.push({
+        id: "caveman-mode",
+        status: "warn",
+        message: "No Caveman mode file targets for the selected agents",
+      });
       return checks;
     }
     for (const file of modeFiles) {
       try {
         const actual = (await readFile(file, "utf8")).trim();
-        checks.push(actual === expected
-          ? { id: `caveman-mode-${path.basename(path.dirname(file))}`, status: "pass", message: `${file} is ${expected}` }
-          : { id: `caveman-mode-${path.basename(path.dirname(file))}`, status: "fail", message: `${file} is ${actual || "(empty)"}, expected ${expected}` });
+        checks.push(
+          actual === expected
+            ? {
+                id: `caveman-mode-${path.basename(path.dirname(file))}`,
+                status: "pass",
+                message: `${file} is ${expected}`,
+              }
+            : {
+                id: `caveman-mode-${path.basename(path.dirname(file))}`,
+                status: "fail",
+                message: `${file} is ${actual || "(empty)"}, expected ${expected}`,
+              },
+        );
       } catch {
-        checks.push({ id: `caveman-mode-${path.basename(path.dirname(file))}`, status: "warn", message: `${file} is not readable yet; open an agent session or rerun init` });
+        checks.push({
+          id: `caveman-mode-${path.basename(path.dirname(file))}`,
+          status: "warn",
+          message: `${file} is not readable yet; open an agent session or rerun init`,
+        });
       }
     }
     return checks;
@@ -153,11 +228,26 @@ export class CavemanAdapter extends BaseAdapter {
 
   async collectMetrics(): Promise<MetricImportResult> {
     const statsFile = process.env.DONT_WASTE_CAVEMAN_STATS_FILE;
-    if (!statsFile) return { source: "caveman-stats", events: [], error: "No explicit DONT_WASTE_CAVEMAN_STATS_FILE was configured; Don’t Waste does not scan agent conversations." };
+    if (!statsFile)
+      return {
+        source: "caveman-stats",
+        events: [],
+        error:
+          "No explicit DONT_WASTE_CAVEMAN_STATS_FILE was configured; Don’t Waste does not scan agent conversations.",
+      };
     try {
       await access(statsFile);
-      return { source: "caveman-stats", events: importCavemanStats(await readFile(statsFile, "utf8")) };
-    } catch (error) { return { source: "caveman-stats", events: [], error: error instanceof Error ? error.message : String(error) }; }
+      return {
+        source: "caveman-stats",
+        events: importCavemanStats(await readFile(statsFile, "utf8")),
+      };
+    } catch (error) {
+      return {
+        source: "caveman-stats",
+        events: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async uninstallPaths(context: AdapterContext): Promise<string[]> {
@@ -173,14 +263,25 @@ export class CavemanAdapter extends BaseAdapter {
     const errors: string[] = [];
     if (!context.dryRun) {
       for (const file of targets) {
-        try { await rm(file, { force: true }); }
-        catch (error) { errors.push(`Failed to remove ${file}: ${error instanceof Error ? error.message : String(error)}`); }
+        try {
+          await rm(file, { force: true });
+        } catch (error) {
+          errors.push(
+            `Failed to remove ${file}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
     }
     return {
       succeeded: errors.length === 0,
       executed: [],
-      skipped: context.dryRun ? targets.map((file) => ({ command: "rm", args: [file], label: `Remove Caveman marker ${file}` })) : [],
+      skipped: context.dryRun
+        ? targets.map((file) => ({
+            command: "rm",
+            args: [file],
+            label: `Remove Caveman marker ${file}`,
+          }))
+        : [],
       errors,
     };
   }

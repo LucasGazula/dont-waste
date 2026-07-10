@@ -8,8 +8,12 @@ export default defineConfig({
       "@dont-waste/core": path.resolve("packages/core/src/index.ts"),
       "@dont-waste/telemetry": path.resolve("packages/telemetry/src/index.ts"),
       "@dont-waste/adapters": path.resolve("packages/adapters/src/index.ts"),
-      "@dont-waste/dashboard-api": path.resolve("packages/dashboard-api/src/index.ts"),
-      "@dont-waste/test-fixtures": path.resolve("packages/test-fixtures/src/index.ts"),
+      "@dont-waste/dashboard-api": path.resolve(
+        "packages/dashboard-api/src/index.ts",
+      ),
+      "@dont-waste/test-fixtures": path.resolve(
+        "packages/test-fixtures/src/index.ts",
+      ),
     },
   },
   test: {

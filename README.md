@@ -45,3 +45,15 @@ The container only visualizes already-collected local data; it never installs or
 export DONT_WASTE_HOST_DATA_DIR="$HOME/.local/share/dont-waste"
 docker compose -f docker/compose.yaml run --service-ports --rm dashboard
 ```
+
+Build the image alone with:
+
+```sh
+docker build -f docker/Dockerfile -t dont-waste .
+```
+
+## Distribution
+
+The publishable CLI package is `dont-waste` (`apps/cli`): `bin` → `./dist/main.js`, `files` → `["dist"]`. Workspace packages export `./dist/index.js`. Optional bootstrap scripts in `scripts/` require Node.js 22+ and run `npm install --global dont-waste@latest` (npm publish / site are separate).
+
+CI runs Prettier, typecheck, tests, build, then a non-destructive CLI smoke (`--help`, `init`/`update`/`collect --dry-run`, dashboard dry-run) on Ubuntu, macOS, and Windows.

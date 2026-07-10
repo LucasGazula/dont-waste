@@ -44,16 +44,31 @@ export type OperationPlan = {
   capabilities: Array<{ agent: AgentId; capability: Capability }>;
 };
 
-export type InstallResult = { succeeded: boolean; executed: Command[]; skipped: Command[]; errors: string[] };
-export type MetricImportResult = { source: string; events: MetricEvent[]; error?: string | undefined };
+export type InstallResult = {
+  succeeded: boolean;
+  executed: Command[];
+  skipped: Command[];
+  errors: string[];
+};
+export type MetricImportResult = {
+  source: string;
+  events: MetricEvent[];
+  error?: string | undefined;
+};
 
 export interface ToolAdapter {
   readonly id: ToolId;
   detect(context: AdapterContext): Promise<DetectionResult>;
   getCapabilities(agent: AgentId): Capability[];
-  planInstall(selection: ToolSelection, context: AdapterContext): Promise<OperationPlan>;
+  planInstall(
+    selection: ToolSelection,
+    context: AdapterContext,
+  ): Promise<OperationPlan>;
   install(plan: OperationPlan, context: AdapterContext): Promise<InstallResult>;
-  verify(selection: ToolSelection, context: AdapterContext): Promise<HealthCheck[]>;
+  verify(
+    selection: ToolSelection,
+    context: AdapterContext,
+  ): Promise<HealthCheck[]>;
   collectMetrics(context: AdapterContext): Promise<MetricImportResult>;
   /** Paths this uninstall may change; used to snapshot before mutation. */
   uninstallPaths(context: AdapterContext): Promise<string[]>;

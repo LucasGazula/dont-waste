@@ -13,20 +13,36 @@ describe("ponytail uninstall", () => {
       selectedAgents: ["claude-code", "codex", "gemini-cli"],
       dryRun: true,
     });
-    expect(result.skipped.map((command) => `${command.command} ${command.args.join(" ")}`)).toEqual(expect.arrayContaining([
-      "claude plugin remove ponytail",
-      "codex plugin remove ponytail",
-      "gemini extensions uninstall ponytail",
-    ]));
+    expect(
+      result.skipped.map(
+        (command) => `${command.command} ${command.args.join(" ")}`,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "claude plugin remove ponytail",
+        "codex plugin remove ponytail",
+        "gemini extensions uninstall ponytail",
+      ]),
+    );
   });
 
   it("removes OpenCode plugin entry and local config without host CLIs", async () => {
-    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-un-"));
+    const home = await mkdtemp(
+      path.join(os.tmpdir(), "dont-waste-ponytail-un-"),
+    );
     const opencode = path.join(home, ".config", "opencode", "opencode.json");
     await mkdir(path.dirname(opencode), { recursive: true });
-    await writeFile(opencode, JSON.stringify({ plugin: ["keep", "@dietrichgebert/ponytail"] }, null, 2), "utf8");
+    await writeFile(
+      opencode,
+      JSON.stringify({ plugin: ["keep", "@dietrichgebert/ponytail"] }, null, 2),
+      "utf8",
+    );
     await mkdir(path.join(home, ".config", "ponytail"), { recursive: true });
-    await writeFile(path.join(home, ".config", "ponytail", "config.json"), JSON.stringify({ defaultMode: "full" }), "utf8");
+    await writeFile(
+      path.join(home, ".config", "ponytail", "config.json"),
+      JSON.stringify({ defaultMode: "full" }),
+      "utf8",
+    );
 
     const adapter = new PonytailAdapter();
     const result = await adapter.uninstall({
@@ -37,8 +53,12 @@ describe("ponytail uninstall", () => {
     });
     expect(result.succeeded).toBe(true);
 
-    const config = JSON.parse(await readFile(opencode, "utf8")) as { plugin: string[] };
+    const config = JSON.parse(await readFile(opencode, "utf8")) as {
+      plugin: string[];
+    };
     expect(config.plugin).toEqual(["keep"]);
-    await expect(readFile(path.join(home, ".config", "ponytail", "config.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      readFile(path.join(home, ".config", "ponytail", "config.json"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
