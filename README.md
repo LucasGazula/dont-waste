@@ -9,13 +9,17 @@ It supports Codex, Claude Code, Gemini CLI, GitHub Copilot CLI, Antigravity CLI,
 ```sh
 corepack enable
 pnpm install
+pnpm --filter dont-waste dev
 pnpm --filter dont-waste dev -- init --dry-run
 pnpm --filter dont-waste dev -- init
 ```
 
+With no arguments in a real terminal, Don’t Waste opens an interactive menu (Setup, Status, Doctor, Collect, Open dashboard, Updates, Uninstall). You can also run `dont-waste menu`. Direct subcommands still work.
+
 The CLI always shows the upstream commands and affected configuration paths before making changes. Use `--yes` only for unattended automation.
 
 ```sh
+dont-waste menu
 dont-waste status
 dont-waste doctor
 dont-waste collect
@@ -24,6 +28,8 @@ dont-waste update
 dont-waste rollback <operation-id>
 dont-waste uninstall
 ```
+
+`dont-waste dashboard` starts the local server, prints a usable URL, and keeps running until Ctrl+C. Metrics collection runs in the background after listen. Build `apps/dashboard` (or set `DONT_WASTE_DASHBOARD_ASSETS`) so the SPA is served; otherwise the API-only page is shown.
 
 The local data directory is `~/.local/share/dont-waste` on Linux, `~/Library/Application Support/dont-waste` on macOS, and `%APPDATA%\dont-waste` on Windows. Set `DONT_WASTE_DATA_DIR` to use another location.
 

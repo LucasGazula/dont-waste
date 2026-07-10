@@ -1,17 +1,19 @@
 import { existsSync } from "node:fs";
-import path from "node:path";
 import process from "node:process";
 import { cancel, confirm, intro, isCancel, multiselect, note, outro, select, spinner } from "@clack/prompts";
 import { createAdapters, detectAgents, type AdapterContext, type OperationPlan, type ToolSelection } from "@dont-waste/adapters";
-import { agentIds, agents, balancedSelection, toolIds, type AgentId, type Mode, type ToolId } from "@dont-waste/catalog";
+import { agents, balancedSelection, toolIds, type AgentId, type Mode, type ToolId } from "@dont-waste/catalog";
 import { createOperation, getDataPaths, readConfig, restoreOperation, setIntegration, updateOperation, writeConfig } from "@dont-waste/core";
 import { createDashboardServer } from "@dont-waste/dashboard-api";
 import { TelemetryStore, aggregateEvents } from "@dont-waste/telemetry";
-import { Command, Option } from "commander";
+import { Command } from "commander";
 import { execa } from "execa";
+import { browserOpenCommand, formatDashboardReady, resolveDashboardStaticDir } from "./dashboard-launch.js";
+import { mainMenuOptions, shouldOpenMainMenu, type MenuAction } from "./menu.js";
 
 type CommonOptions = { dryRun?: boolean; json?: boolean; yes?: boolean };
 type InitOptions = CommonOptions & { profile?: Profile; channel?: "pinned" | "latest" };
+type DashboardOptions = CommonOptions & { port?: string; open: boolean };
 type Profile = "balanced" | "maximum-savings" | "custom" | "install-only";
 type InitRequest = { profile: Profile; channel: "pinned" | "latest"; selectedAgents: AgentId[]; selections: Record<ToolId, ToolSelection> };
 type PlanResult = { request: InitRequest; plans: OperationPlan[]; diagnostics: Awaited<ReturnType<typeof detectAgents>> };
@@ -193,10 +195,7 @@ function addCommonOptions(command: Command): Command {
   return command.option("--dry-run", "show changes without modifying this machine").option("--json", "write machine-readable JSON").option("--yes", "skip confirmation after the plan is shown");
 }
 
-const program = new Command();
-program.name("dont-waste").description("Local-first token reduction orchestrator for coding agents").version(packageVersion);
-
-addCommonOptions(program.command("init").description("detect, plan, install, and validate integrations").option("--profile <profile>", "balanced, maximum-savings, custom, or install-only").option("--channel <channel>", "pinned or latest")).action(async (options: InitOptions) => {
+async function runInit(options: InitOptions): Promise<void> {
   requireConfirmation(options);
   const setup = await makePlan(options);
   if (!options.json) {
@@ -212,17 +211,17 @@ addCommonOptions(program.command("init").description("detect, plan, install, and
   work?.stop("Plan finished");
   result({ plan: setup, ...applied }, options);
   if (!options.json && !options.dryRun) outro(`Done. Operation ${applied.operationId}. Run dont-waste collect after using an enabled agent.`);
-});
+}
 
-addCommonOptions(program.command("status").description("show configured tools, agents, profile, and health")).action(async (options: CommonOptions) => {
+async function runStatus(options: CommonOptions): Promise<void> {
   const paths = getDataPaths();
   const config = await readConfig(paths);
   const diagnostics = await detectAgents(context([], true));
   const adapterDetections = await Promise.all(Object.values(createAdapters()).map((adapter) => adapter.detect(context([], true))));
   result({ config, agents: diagnostics, tools: adapterDetections }, options);
-});
+}
 
-addCommonOptions(program.command("doctor").description("revalidate binaries, PATH, database, and integrations")).action(async (options: CommonOptions) => {
+async function runDoctor(options: CommonOptions): Promise<void> {
   const paths = getDataPaths();
   const config = await readConfig(paths);
   const selectedAgents = Object.keys(config.integrations) as AgentId[];
@@ -231,44 +230,65 @@ addCommonOptions(program.command("doctor").description("revalidate binaries, PAT
   for (const tool of toolIds) checks.push({ tool, checks: await adapters[tool].verify({ mode: "full", features: {} }, context(selectedAgents, true)) });
   const database = await TelemetryStore.open(paths); database.close();
   result({ checks, database: { status: "pass", path: paths.database } }, options);
-});
+}
 
-addCommonOptions(program.command("collect").description("import available local metrics from enabled upstream tools")).action(async (options: CommonOptions) => {
+async function runCollect(options: CommonOptions): Promise<void> {
   if (options.dryRun) return result({ dryRun: true, sources: ["rtk gain", "headroom perf", "caveman explicit stats file", "ponytail (unavailable)"] }, options);
   result(await collect(), options);
-});
+}
 
-addCommonOptions(program.command("dashboard").description("collect metrics and start the local dashboard").option("--port <port>", "bind this local port").option("--no-open", "do not open the browser")).action(async (options: CommonOptions & { port?: string; open: boolean }) => {
-  if (!options.dryRun) await collect();
-  const staticDir = process.env.DONT_WASTE_DASHBOARD_ASSETS ?? path.resolve(process.cwd(), "apps/dashboard/dist");
-  const dashboard = await createDashboardServer(getDataPaths(), { port: options.port ? Number(options.port) : undefined, staticDir: existsSync(staticDir) ? staticDir : undefined, host: process.env.DONT_WASTE_DASHBOARD_HOST });
-  result({ url: dashboard.url, staticAssets: existsSync(staticDir) }, options);
+async function runDashboard(options: DashboardOptions): Promise<void> {
+  const staticDir = resolveDashboardStaticDir({
+    cwd: process.cwd(),
+    envAssets: process.env.DONT_WASTE_DASHBOARD_ASSETS,
+    existsSync,
+  });
+  // Listen and print the URL before any slow collect so the API is usable immediately.
+  const dashboard = await createDashboardServer(getDataPaths(), {
+    port: options.port ? Number(options.port) : undefined,
+    staticDir,
+    host: process.env.DONT_WASTE_DASHBOARD_HOST,
+  });
+  const ready = formatDashboardReady(dashboard.url, Boolean(staticDir));
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify({ url: dashboard.url, staticAssets: Boolean(staticDir) }, null, 2)}\n`);
+  } else {
+    note(ready, "Dashboard");
+    process.stdout.write(`${dashboard.url}\n`);
+  }
   if (options.open) {
-    const opener = process.platform === "win32" ? { command: "cmd", args: ["/c", "start", "", dashboard.url] } : process.platform === "darwin" ? { command: "open", args: [dashboard.url] } : { command: "xdg-open", args: [dashboard.url] };
+    const opener = browserOpenCommand(process.platform, dashboard.url);
     void execa(opener.command, opener.args, { reject: false, detached: true });
+  }
+  if (!options.dryRun) {
+    void collect().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!options.json) console.error(`Background collect failed: ${message}`);
+    });
   }
   const close = async () => { await dashboard.close(); process.exit(0); };
   process.once("SIGINT", () => void close()); process.once("SIGTERM", () => void close());
-});
+  await new Promise<void>(() => undefined);
+}
 
-addCommonOptions(program.command("update").description("check official upstream releases and apply an idempotent upgrade plan")).action(async (options: CommonOptions) => {
+async function runUpdate(options: CommonOptions): Promise<void> {
   const updates = await officialUpdates();
   if (!options.yes || options.dryRun) return result({ dontWaste: packageVersion, updates, next: "Review release notes; rerun with --yes to apply the validated integration plan." }, options);
   requireConfirmation(options);
   const config = await readConfig(getDataPaths());
   const setup = await makePlan({ ...options, profile: config.profile, channel: config.updateChannel });
   result({ updates, ...(await applyPlan(setup, "update", options)) }, options);
-});
+}
 
-addCommonOptions(program.command("rollback <id>").description("restore the configuration snapshot from an operation")).action(async (id: string, options: CommonOptions) => {
+async function runRollback(id: string, options: CommonOptions): Promise<void> {
   if (options.dryRun) return result({ dryRun: true, operation: id }, options);
   requireConfirmation(options);
   if (!options.yes && process.stdin.isTTY && !checked(await confirm({ message: `Restore snapshot ${id}?`, initialValue: false }))) return;
   const operation = await restoreOperation(getDataPaths(), id);
   result({ restored: id, operation }, options);
-});
+}
 
-addCommonOptions(program.command("uninstall").description("remove Don’t Waste managed integrations without deleting upstream tools adopted from the user")).action(async (options: CommonOptions) => {
+async function runUninstall(options: CommonOptions): Promise<void> {
   if (options.dryRun) return result({ dryRun: true, action: "run adapter uninstallers and clear Don’t Waste integrations; telemetry stays local; use rollback <id> for a specific snapshot" }, options);
   requireConfirmation(options);
   if (!options.yes && process.stdin.isTTY && !checked(await confirm({ message: "Remove managed integrations and clear Don’t Waste activation state?", initialValue: false }))) return;
@@ -289,11 +309,97 @@ addCommonOptions(program.command("uninstall").description("remove Don’t Waste 
     telemetry: "preserved",
     note: "Historical snapshots were not auto-restored. Use dont-waste rollback <id> if you need a specific pre-init file state.",
   }, options);
+}
+
+async function runMainMenu(): Promise<void> {
+  intro("Don’t Waste");
+  note("Use arrow keys to choose an action. Existing CLI commands still work directly.", "Terminal UI");
+  for (;;) {
+    const action = checked(await select({
+      message: "What do you want to do?",
+      options: mainMenuOptions,
+    })) as MenuAction;
+    if (action === "exit") {
+      outro("Bye.");
+      return;
+    }
+    if (action === "dashboard") {
+      const openBrowser = checked(await confirm({ message: "Open the dashboard in your browser?", initialValue: true }));
+      await runDashboard({ open: openBrowser });
+      return;
+    }
+    if (action === "init") {
+      await runInit({});
+      outro("Back at the menu next time you run dont-waste with no arguments.");
+      return;
+    }
+    if (action === "status") await runStatus({});
+    else if (action === "doctor") await runDoctor({});
+    else if (action === "collect") await runCollect({});
+    else if (action === "update") await runUpdate({});
+    else if (action === "uninstall") await runUninstall({});
+    note("Choose another action, or Exit.", "Done");
+  }
+}
+
+const program = new Command();
+program.name("dont-waste").description("Local-first token reduction orchestrator for coding agents").version(packageVersion);
+
+program.command("menu").description("open the interactive terminal menu").action(async () => {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("The interactive menu needs a terminal. Use dont-waste --help for direct commands.");
+  }
+  await runMainMenu();
 });
 
-program.parseAsync().catch((error: unknown) => {
+addCommonOptions(program.command("init").description("detect, plan, install, and validate integrations").option("--profile <profile>", "balanced, maximum-savings, custom, or install-only").option("--channel <channel>", "pinned or latest")).action(async (options: InitOptions) => {
+  await runInit(options);
+});
+
+addCommonOptions(program.command("status").description("show configured tools, agents, profile, and health")).action(async (options: CommonOptions) => {
+  await runStatus(options);
+});
+
+addCommonOptions(program.command("doctor").description("revalidate binaries, PATH, database, and integrations")).action(async (options: CommonOptions) => {
+  await runDoctor(options);
+});
+
+addCommonOptions(program.command("collect").description("import available local metrics from enabled upstream tools")).action(async (options: CommonOptions) => {
+  await runCollect(options);
+});
+
+addCommonOptions(program.command("dashboard").description("collect metrics and start the local dashboard").option("--port <port>", "bind this local port").option("--no-open", "do not open the browser")).action(async (options: DashboardOptions) => {
+  await runDashboard(options);
+});
+
+addCommonOptions(program.command("update").description("check official upstream releases and apply an idempotent upgrade plan")).action(async (options: CommonOptions) => {
+  await runUpdate(options);
+});
+
+addCommonOptions(program.command("rollback <id>").description("restore the configuration snapshot from an operation")).action(async (id: string, options: CommonOptions) => {
+  await runRollback(id, options);
+});
+
+addCommonOptions(program.command("uninstall").description("remove Don’t Waste managed integrations without deleting upstream tools adopted from the user")).action(async (options: CommonOptions) => {
+  await runUninstall(options);
+});
+
+async function main(): Promise<void> {
+  if (shouldOpenMainMenu(process.argv, {
+    stdinIsTTY: Boolean(process.stdin.isTTY),
+    stdoutIsTTY: Boolean(process.stdout.isTTY),
+  })) {
+    await runMainMenu();
+    return;
+  }
+  await program.parseAsync(process.argv);
+}
+
+main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });
 
-export { collect, makePlan };
+export { collect, makePlan, runMainMenu };
+export { mainMenuOptions, shouldOpenMainMenu } from "./menu.js";
+export { browserOpenCommand, formatDashboardReady, resolveDashboardStaticDir } from "./dashboard-launch.js";

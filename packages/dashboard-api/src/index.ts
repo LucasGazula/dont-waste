@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import path from "node:path";
 import { createAdapters } from "@dont-waste/adapters";
 import { agents, capabilities, upstream } from "@dont-waste/catalog";
 import { readConfig, type DataPaths } from "@dont-waste/core";
@@ -14,7 +15,8 @@ export type DashboardApp = { app: FastifyInstance; close(): Promise<void> };
 
 async function existingDirectory(directory: string | undefined): Promise<string | undefined> {
   if (!directory) return undefined;
-  try { await access(directory); return directory; } catch { return undefined; }
+  const absolute = path.resolve(directory);
+  try { await access(absolute); return absolute; } catch { return undefined; }
 }
 
 export async function createDashboardApp(paths: DataPaths, options: { staticDir?: string | undefined } = {}): Promise<DashboardApp> {
