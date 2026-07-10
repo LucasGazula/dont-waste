@@ -73,19 +73,6 @@ export class HeadroomAdapter extends BaseAdapter {
           optional: true,
         });
     }
-    if (
-      selection.features.learnVerbosity &&
-      context.selectedAgents.length > 0
-    ) {
-      commands.push({
-        command: "headroom",
-        args: ["learn", "--verbosity"],
-        label:
-          "Preview Headroom learned verbosity (dry-run; add --apply manually after review)",
-        interactive: true,
-        optional: true,
-      });
-    }
     const affectedPaths = [
       ...context.selectedAgents.flatMap((agent) =>
         getAgentPaths(agent, context),
@@ -120,9 +107,6 @@ export class HeadroomAdapter extends BaseAdapter {
           : "",
         selection.features.ccrTtl
           ? `HEADROOM_CCR_TTL_SECONDS=${HEADROOM_CCR_TTL_SECONDS_VALUE} will be written into marker-owned Headroom MCP env for longer CCR retention.`
-          : "",
-        selection.features.learnVerbosity
-          ? "learn --verbosity is offered as an optional preview only; Don’t Waste never passes --apply automatically."
           : "",
         ...pendingAdvancedControlNotes(["headroom"]),
       ].filter(Boolean),
@@ -256,14 +240,6 @@ export class HeadroomAdapter extends BaseAdapter {
         id: "headroom-ccr-ttl",
         status: "pass",
         message: `CCR TTL feature requests HEADROOM_CCR_TTL_SECONDS=${HEADROOM_CCR_TTL_SECONDS_VALUE} on marker-owned MCP env`,
-      });
-    }
-    if (selection.features.learnVerbosity) {
-      checks.push({
-        id: "headroom-learn-verbosity",
-        status: "pass",
-        message:
-          "learn --verbosity is configured as optional preview only (no automatic --apply)",
       });
     }
     return checks;

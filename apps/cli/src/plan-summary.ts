@@ -105,7 +105,7 @@ export function summarizePlanByAgent(input: PlanSummaryInput): AgentPlanRow[] {
             tool === "headroom" || tool === "rtk",
         ),
       ),
-      "Supported advanced toggles in TUI when Headroom is enabled: outputShaper, ccrTtl, learnVerbosity",
+      "Supported Headroom advanced toggles in TUI: outputShaper, ccrTtl (documented MCP env only)",
     ];
     return {
       agent,

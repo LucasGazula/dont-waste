@@ -10,40 +10,51 @@ import { headroomMcpSpec } from "../src/mcp.js";
 import { HeadroomAdapter } from "../src/headroom.js";
 
 describe("advanced control contracts", () => {
-  it("marks mcp-shrink unsupported and wires only documented Headroom env keys", () => {
-    expect(
-      unsupportedControls("headroom").some(
-        (item) => item.id === "headroom-mcp-shrink",
-      ),
-    ).toBe(true);
+  it("supports only verified Headroom MCP env controls; keeps learn/mcp-shrink pending", () => {
     expect(
       advancedControlContracts.find((item) => item.id === "headroom-ccr-ttl")
         ?.status,
     ).toBe("supported");
+    expect(
+      advancedControlContracts.find(
+        (item) => item.id === "headroom-output-shaper",
+      )?.status,
+    ).toBe("supported");
+    expect(
+      unsupportedControls("headroom")
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["headroom-learn-verbosity", "headroom-mcp-shrink"]);
+    expect(
+      unsupportedControls("rtk").some((item) => item.id === "rtk-temporal-ttl"),
+    ).toBe(true);
     expect(headroomFeatureEnv({ outputShaper: true, ccrTtl: true })).toEqual({
       HEADROOM_OUTPUT_SHAPER: "1",
       HEADROOM_CCR_TTL_SECONDS: HEADROOM_CCR_TTL_SECONDS_VALUE,
     });
-    expect(headroomFeatureEnv({})).toBeUndefined();
-    expect(pendingAdvancedControlNotes(["headroom"])[0]).toContain(
-      "mcp-shrink",
-    );
+    expect(headroomFeatureEnv({ learnVerbosity: true })).toBeUndefined();
+    const notes = pendingAdvancedControlNotes(["headroom", "rtk"]).join(" ");
+    expect(notes).toContain("learn-verbosity");
+    expect(notes).toContain("Privacy");
+    expect(notes).toContain("mcp-shrink");
+    expect(notes).toContain("size/LRU");
   });
 
-  it("embeds feature env into Headroom MCP specs", () => {
+  it("embeds only documented feature env into Headroom MCP specs", () => {
     const spec = headroomMcpSpec("/usr/bin/headroom", {
       outputShaper: true,
       ccrTtl: true,
+      learnVerbosity: true,
     });
-    expect(spec.env).toMatchObject({
+    expect(spec.env).toEqual({
       HEADROOM_OUTPUT_SHAPER: "1",
       HEADROOM_CCR_TTL_SECONDS: "7200",
     });
   });
 
-  it("plans learn --verbosity as optional preview without --apply; install-only skips it", async () => {
+  it("does not plan learn --verbosity; still warns about unsupported controls", async () => {
     const adapter = new HeadroomAdapter();
-    const withAgents = await adapter.planInstall(
+    const plan = await adapter.planInstall(
       {
         mode: "full",
         features: { learnVerbosity: true, ccrTtl: true, outputShaper: true },
@@ -55,31 +66,19 @@ describe("advanced control contracts", () => {
         dryRun: true,
       },
     );
-    const learn = withAgents.commands.find((command) =>
-      command.args.includes("--verbosity"),
-    );
-    expect(learn?.command).toBe("headroom");
-    expect(learn?.args).toEqual(["learn", "--verbosity"]);
-    expect(learn?.args).not.toContain("--apply");
-    expect(learn?.optional).toBe(true);
-    expect(learn?.interactive).toBe(true);
     expect(
-      withAgents.warnings.some((warning) =>
+      plan.commands.some((command) => command.args.includes("--verbosity")),
+    ).toBe(false);
+    expect(
+      plan.warnings.some((warning) =>
         warning.includes("HEADROOM_CCR_TTL_SECONDS=7200"),
       ),
     ).toBe(true);
     expect(
-      withAgents.warnings.some((warning) => warning.includes("mcp-shrink")),
+      plan.warnings.some((warning) => warning.includes("mcp-shrink")),
     ).toBe(true);
-
-    const installOnly = await adapter.planInstall(
-      { mode: "full", features: { learnVerbosity: true } },
-      { platform: "linux", home: "/tmp", selectedAgents: [], dryRun: true },
-    );
     expect(
-      installOnly.commands.some((command) =>
-        command.args.includes("--verbosity"),
-      ),
-    ).toBe(false);
+      plan.warnings.some((warning) => warning.includes("learn-verbosity")),
+    ).toBe(true);
   });
 });

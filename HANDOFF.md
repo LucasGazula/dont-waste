@@ -29,8 +29,8 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 ### Adaptadores
 
 - **RTK / Headroom:** endurecidos (release SHA-256, MCP merge, fallbacks de collect).
-- **Headroom advanced (verificável):** `outputShaper` → `HEADROOM_OUTPUT_SHAPER=1`; `ccrTtl` → `HEADROOM_CCR_TTL_SECONDS=7200` em MCP marker-owned; `learnVerbosity` → comando opcional `headroom learn --verbosity` sem `--apply`.
-- **MCP-shrink:** pending/unsupported (sem flag upstream; compress via `headroom mcp serve`).
+- **Headroom advanced (verificável):** `outputShaper` → `HEADROOM_OUTPUT_SHAPER=1`; `ccrTtl` → `HEADROOM_CCR_TTL_SECONDS=7200` em MCP marker-owned.
+- **Pending/unsupported:** `learn --verbosity` (privacidade — não minerar transcripts); MCP-shrink (sem flag/comando verificado que garanta binário + mcp.json); TTL temporal RTK (RTK usa size/LRU, não TTL de tempo).
 - **Caveman:** markers + cavecrew/compress marker-owned.
 - **Ponytail:** uninstall ampliado (incl. Copilot/Antigravity).
 
@@ -48,8 +48,8 @@ Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Code
 1. **Playwright** — sem infra no monorepo.
 2. **Docker daemon** — smoke script existe; validação real ainda indisponível neste WSL.
 3. **npm publish / site** `dont-waste.dev` — fora de escopo até release.
-4. **MCP-shrink** — sem contrato upstream discreto (compressão MCP já vem com `headroom mcp serve`).
-5. Controles ainda fora do TUI: CCR/TTL via wrap/proxy shell env fora de MCP; `learn --verbosity --apply` permanece manual.
+4. **MCP-shrink / learn --verbosity / RTK temporal TTL** — pending/unsupported (ver contratos em `advanced-controls.ts`).
+5. CCR via wrap/proxy shell env fora de MCP permanece manual.
 
 ## Regras
 

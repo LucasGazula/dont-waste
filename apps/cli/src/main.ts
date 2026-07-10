@@ -316,20 +316,12 @@ async function interactiveRequest(
             initialValue: Boolean(current.features.ccrTtl),
           }),
         );
-        const learnVerbosity = checked(
-          await confirm({
-            message:
-              "Offer headroom learn --verbosity preview after setup? (never auto --apply)",
-            initialValue: Boolean(current.features.learnVerbosity),
-          }),
-        );
         selections[tool] = {
           ...current,
           features: {
             ...current.features,
             outputShaper,
             ccrTtl,
-            learnVerbosity,
           },
         };
       }

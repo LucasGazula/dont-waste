@@ -41,18 +41,27 @@ export const advancedControlContracts: readonly AdvancedControlContract[] = [
   {
     id: "headroom-learn-verbosity",
     tool: "headroom",
-    status: "supported",
-    featureKey: "learnVerbosity",
-    summary: "Offer headroom learn --verbosity preview (never auto --apply)",
-    upstream: "headroom learn --verbosity",
+    status: "unsupported",
+    summary: "headroom learn --verbosity",
+    upstream: "headroom learn --verbosity [--apply]",
+    reason:
+      "Privacy: Don’t Waste must not mine or apply session-transcript learning; leave learn --verbosity to the user outside this orchestrator",
   },
   {
     id: "headroom-mcp-shrink",
     tool: "headroom",
     status: "unsupported",
-    summary: "Discrete MCP-shrink toggle",
+    summary: "Discrete MCP-shrink toggle/command",
     reason:
-      "No upstream flag named mcp-shrink; compression tools ship with `headroom mcp serve` once MCP is registered",
+      "No verified upstream mcp-shrink flag/command; inventing one would not guarantee a Headroom executable on PATH nor a correct mcp.json/MCP registration",
+  },
+  {
+    id: "rtk-temporal-ttl",
+    tool: "rtk",
+    status: "unsupported",
+    summary: "Temporal TTL for RTK caches",
+    reason:
+      "RTK does not expose a temporal TTL comparable to HEADROOM_CCR_TTL_SECONDS; it uses size/LRU limits instead",
   },
   {
     id: "rtk-ultra-compact",
