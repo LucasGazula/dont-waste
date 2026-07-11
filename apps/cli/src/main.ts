@@ -130,6 +130,18 @@ function checked<T>(value: T | symbol): T {
   }
   return value as T;
 }
+
+class SetupBackSignal extends Error {
+  constructor() {
+    super("setup back");
+    this.name = "SetupBackSignal";
+  }
+}
+
+function setupChecked<T>(value: T | symbol): T {
+  if (isCancel(value)) throw new SetupBackSignal();
+  return value as T;
+}
 function defaultSelections(profile: Profile): Record<ToolId, ToolSelection> {
   const modes = balancedSelection();
   if (profile === "maximum-savings") modes.caveman = "ultra";
@@ -180,6 +192,23 @@ async function interactiveRequest(
   options: InitOptions,
   diagnostics: Awaited<ReturnType<typeof detectAgents>>,
 ): Promise<InitRequest> {
+  for (;;) {
+    try {
+      return await interactiveRequestBody(options, diagnostics);
+    } catch (error) {
+      if (!(error instanceof SetupBackSignal)) throw error;
+      note(
+        "Returning to the setup screen. Review the previous choices again.",
+        "Back",
+      );
+    }
+  }
+}
+
+async function interactiveRequestBody(
+  options: InitOptions,
+  diagnostics: Awaited<ReturnType<typeof detectAgents>>,
+): Promise<InitRequest> {
   const detected = diagnostics
     .filter((item) => item.detected || item.existingConfigs.length > 0)
     .map((item) => item.agent);
@@ -202,9 +231,10 @@ async function interactiveRequest(
       .join("\n"),
     "Environment diagnosis",
   );
+  const checked = setupChecked;
   const profile = checked(
     await select({
-      message: "Choose a profile",
+      message: "Choose a profile (Esc goes back)",
       initialValue: options.profile ?? "balanced",
       options: [
         {
@@ -228,7 +258,7 @@ async function interactiveRequest(
   ) as Profile;
   const selectedAgents = checked(
     await multiselect({
-      message: "Which detected agents should be configured?",
+      message: "Which detected agents should be configured? (Esc goes back)",
       options: diagnostics.map((agent) => ({
         value: agent.agent,
         label:
@@ -355,7 +385,7 @@ async function interactiveRequest(
   }
   const channel = checked(
     await select({
-      message: "Update policy",
+      message: "Update policy (Esc goes back)",
       initialValue: options.channel ?? "pinned",
       options: [
         {
@@ -1074,6 +1104,7 @@ async function runMainMenu(): Promise<void> {
       await select({
         message: "What do you want to do?",
         options: mainMenuOptions,
+        maxItems: mainMenuOptions.length,
       }),
     ) as MenuAction;
     if (action === "exit") {
