@@ -1,19 +1,28 @@
+import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
 import type { Command, DetectionResult, RunCommandHooks } from "./types.js";
 
 /** Default bound for non-interactive upstream installers (avoids infinite prompt hangs). */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 export const DEFAULT_FORCE_KILL_MS = 5_000;
+export const FIND_EXECUTABLE_TIMEOUT_MS = 3_000;
 
 export async function findExecutable(
   command: string,
   platform = process.platform,
 ): Promise<string | undefined> {
   try {
-    const result = await execa(
-      platform === "win32" ? "where" : "command",
-      platform === "win32" ? [command] : ["-v", command],
-      { reject: false, shell: platform !== "win32" },
+    const result = await trackInFlight(
+      execa(
+        platform === "win32" ? "where" : "command",
+        platform === "win32" ? [command] : ["-v", command],
+        {
+          reject: false,
+          shell: platform !== "win32",
+          timeout: FIND_EXECUTABLE_TIMEOUT_MS,
+          forceKillAfterDelay: DEFAULT_FORCE_KILL_MS,
+        },
+      ),
     );
     const first = result.stdout.split(/\r?\n/).find(Boolean);
     return result.exitCode === 0 && first ? first.trim() : undefined;
@@ -30,11 +39,13 @@ export async function executableDetection(
   if (!resolved)
     return { id, detected: false, warnings: [`${executable} is not on PATH`] };
   try {
-    const result = await execa(executable, ["--version"], {
-      reject: false,
-      timeout: 3_000,
-      forceKillAfterDelay: false,
-    });
+    const result = await trackInFlight(
+      execa(executable, ["--version"], {
+        reject: false,
+        timeout: 3_000,
+        forceKillAfterDelay: DEFAULT_FORCE_KILL_MS,
+      }),
+    );
     const version = (result.stdout || result.stderr).split(/\r?\n/)[0]?.trim();
     return {
       id,
@@ -57,6 +68,13 @@ export async function executableDetection(
   }
 }
 
+function runCommandHooksFromContext(hooks: RunCommandHooks): RunCommandHooks {
+  const next: RunCommandHooks = {};
+  if (hooks.beforeCommand) next.beforeCommand = hooks.beforeCommand;
+  if (hooks.abortSignal) next.abortSignal = hooks.abortSignal;
+  return next;
+}
+
 export async function runCommand(
   command: Command,
   dryRun: boolean,
@@ -74,24 +92,62 @@ export async function runCommand(
       ? DEFAULT_FORCE_KILL_MS
       : command.forceKillAfterDelay;
 
-  const result = await execa(command.command, command.args, {
-    reject: false,
-    shell: command.shell ?? false,
-    stdio: "inherit",
-    ...(command.env
-      ? { env: { ...process.env, ...command.env } as NodeJS.ProcessEnv }
-      : {}),
-    timeout,
-    forceKillAfterDelay,
-  });
+  try {
+    const result = await trackInFlight(
+      execa(command.command, command.args, {
+        reject: false,
+        shell: command.shell ?? false,
+        stdio: "inherit",
+        ...(command.env
+          ? { env: { ...process.env, ...command.env } as NodeJS.ProcessEnv }
+          : {}),
+        ...(hooks.abortSignal ? { cancelSignal: hooks.abortSignal } : {}),
+        timeout,
+        forceKillAfterDelay,
+      }),
+    );
 
-  if (result.timedOut) {
+    if (hooks.abortSignal?.aborted) {
+      return {
+        ran: true,
+        error: `${command.label} aborted before completion`,
+      };
+    }
+    if (result.timedOut) {
+      return {
+        ran: true,
+        error: `${command.label} timed out after ${timeout}ms (possible interactive prompt or hang)`,
+      };
+    }
+    if (result.isCanceled) {
+      return {
+        ran: true,
+        error: `${command.label} aborted before completion`,
+      };
+    }
+    return result.exitCode === 0
+      ? { ran: true }
+      : { ran: true, error: `${command.label} exited with ${result.exitCode}` };
+  } catch (error) {
+    if (hooks.abortSignal?.aborted) {
+      return {
+        ran: true,
+        error: `${command.label} aborted before completion`,
+      };
+    }
     return {
       ran: true,
-      error: `${command.label} timed out after ${timeout}ms (possible interactive prompt or hang)`,
+      error: `${command.label} failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
-  return result.exitCode === 0
-    ? { ran: true }
-    : { ran: true, error: `${command.label} exited with ${result.exitCode}` };
+}
+
+export function commandHooksFromAdapterContext(context: {
+  beforeCommand?: RunCommandHooks["beforeCommand"];
+  abortSignal?: AbortSignal | undefined;
+}): RunCommandHooks {
+  return runCommandHooksFromContext({
+    beforeCommand: context.beforeCommand,
+    abortSignal: context.abortSignal,
+  });
 }

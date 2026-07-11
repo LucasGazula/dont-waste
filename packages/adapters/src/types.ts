@@ -20,6 +20,8 @@ export type Command = {
 export type RunCommandHooks = {
   /** Called before skip/spawn so the CLI can stop a spinner and show progress. */
   beforeCommand?: ((command: Command) => void | Promise<void>) | undefined;
+  /** Abort in-flight execa children (SIGINT/SIGTERM / tests). */
+  abortSignal?: AbortSignal | undefined;
 };
 
 export type DetectionResult = {
@@ -44,6 +46,8 @@ export type AdapterContext = {
   dryRun: boolean;
   /** Stop UI spinners / print progress before each planned command. */
   beforeCommand?: ((command: Command) => void | Promise<void>) | undefined;
+  /** Cancel external children when the operation is interrupted. */
+  abortSignal?: AbortSignal | undefined;
 };
 
 export type ToolSelection = { mode: Mode; features: Record<string, boolean> };

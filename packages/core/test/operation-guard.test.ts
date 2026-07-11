@@ -65,9 +65,14 @@ describe("operation signal guard", () => {
     await updateOperation(paths, operation.id, "running");
 
     await expect(
-      withOperationSignalGuards(paths, operation.id, async () => {
-        throw new Error("child hung");
-      }),
+      withOperationSignalGuards(
+        paths,
+        operation.id,
+        async () => {
+          throw new Error("child hung");
+        },
+        { exitOnSignal: false },
+      ),
     ).rejects.toThrow(/child hung/);
 
     const ops = await listOperations(paths);

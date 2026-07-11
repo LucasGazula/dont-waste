@@ -6,7 +6,12 @@ import {
   installRtkFromOfficialRelease,
   resolveRtkTarget,
 } from "./rtk-release.js";
-import { executableDetection, findExecutable, runCommand } from "./runtime.js";
+import {
+  executableDetection,
+  findExecutable,
+  runCommand,
+  commandHooksFromAdapterContext,
+} from "./runtime.js";
 import type {
   AdapterContext,
   Command,
@@ -31,6 +36,8 @@ export function rtkInitArgs(agent: AgentId): string[] {
 
 const RTK_RELEASE_LABEL =
   "Install RTK from official GitHub release with SHA-256 verification";
+
+export { RTK_RELEASE_LABEL };
 
 export class RtkAdapter extends BaseAdapter {
   readonly id = "rtk" as const;
@@ -101,9 +108,15 @@ export class RtkAdapter extends BaseAdapter {
     const errors: string[] = [];
     for (const command of plan.commands) {
       if (command.label === RTK_RELEASE_LABEL) {
+        await context.beforeCommand?.(command);
         if (context.dryRun) {
           skipped.push(command);
           continue;
+        }
+        if (context.abortSignal?.aborted) {
+          executed.push(command);
+          errors.push(`${command.label} aborted before completion`);
+          break;
         }
         try {
           const installed = await installRtkFromOfficialRelease({
@@ -127,7 +140,7 @@ export class RtkAdapter extends BaseAdapter {
       const result = await runCommand(
         command,
         context.dryRun,
-        context.beforeCommand ? { beforeCommand: context.beforeCommand } : {},
+        commandHooksFromAdapterContext(context),
       );
       if (result.ran) executed.push(command);
       else skipped.push(command);

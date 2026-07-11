@@ -174,6 +174,7 @@ export class HeadroomAdapter extends BaseAdapter {
       const doctor = await execa("headroom", ["doctor"], {
         reject: false,
         timeout: 15_000,
+        forceKillAfterDelay: 5_000,
       });
       checks.push({
         id: "headroom-doctor",

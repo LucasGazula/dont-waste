@@ -90,6 +90,7 @@ function context(
   selectedAgents: AgentId[],
   dryRun: boolean,
   beforeCommand?: (command: AdapterCommand) => void | Promise<void>,
+  abortSignal?: AbortSignal,
 ): AdapterContext {
   return {
     platform: process.platform,
@@ -97,6 +98,7 @@ function context(
     selectedAgents,
     dryRun,
     beforeCommand,
+    abortSignal,
   };
 }
 function result(value: unknown, options: CommonOptions): void {
@@ -441,7 +443,7 @@ async function applyPlan(
     skippedInteractive: string[];
   }> = [];
 
-  return withOperationSignalGuards(paths, operation.id, async () => {
+  return withOperationSignalGuards(paths, operation.id, async ({ signal }) => {
     const installByTool = new Map<ToolId, InstallResult>();
     for (const toolPlan of plan.plans) {
       progress?.onProgress?.(`Installing ${toolPlan.tool}…`);
@@ -453,6 +455,7 @@ async function applyPlan(
             : plan.request.selectedAgents,
           false,
           progress?.beforeCommand,
+          signal,
         ),
       );
       installByTool.set(toolPlan.tool, installed);
@@ -1008,52 +1011,56 @@ async function runUninstall(options: CommonOptions): Promise<void> {
     affected,
   );
   await updateOperation(paths, operation.id, "running");
-  const adapterResults = [];
-  for (const tool of toolIds) {
-    adapterResults.push({ tool, ...(await adapters[tool].uninstall(ctx)) });
-  }
-  const failed = adapterResults.filter((item) => !item.succeeded);
-  if (failed.length) {
-    await restoreOperation(paths, operation.id);
-    await updateOperation(
+  try {
+    const adapterResults = await withOperationSignalGuards(
       paths,
       operation.id,
-      "failed",
-      failed
-        .map((item) => `${item.tool}: ${item.errors.join("; ")}`)
-        .join(" | "),
+      async ({ signal }) => {
+        const guardedCtx = context(selectedAgents, false, undefined, signal);
+        const results = [];
+        for (const tool of toolIds) {
+          const uninstallResult = await adapters[tool].uninstall(guardedCtx);
+          results.push({ tool, ...uninstallResult });
+          if (!uninstallResult.succeeded) {
+            throw new Error(
+              `${tool}: ${uninstallResult.errors.join("; ") || "uninstall failed"}`,
+            );
+          }
+        }
+        await writeConfig(paths, {
+          ...config,
+          integrations: {},
+          profile: "install-only",
+        });
+        await updateOperation(paths, operation.id, "succeeded");
+        return results;
+      },
     );
     result(
       {
         operation: operation.id,
-        succeeded: false,
+        succeeded: true,
         adapters: adapterResults,
+        clearedIntegrations: selectedAgents,
+        affectedPaths: affected,
+        telemetry: "preserved",
+        note: "Only marker-owned Don’t Waste files were removed. Use dont-waste rollback <id> if you need a specific pre-init file state.",
+      },
+      options,
+    );
+  } catch (error) {
+    result(
+      {
+        operation: operation.id,
+        succeeded: false,
         restoredSnapshot: true,
+        error: error instanceof Error ? error.message : String(error),
         note: "Uninstall failed; previous files were restored from the operation snapshot.",
       },
       options,
     );
     process.exitCode = 1;
-    return;
   }
-  await writeConfig(paths, {
-    ...config,
-    integrations: {},
-    profile: "install-only",
-  });
-  await updateOperation(paths, operation.id, "succeeded");
-  result(
-    {
-      operation: operation.id,
-      succeeded: true,
-      adapters: adapterResults,
-      clearedIntegrations: selectedAgents,
-      affectedPaths: affected,
-      telemetry: "preserved",
-      note: "Only marker-owned Don’t Waste files were removed. Use dont-waste rollback <id> if you need a specific pre-init file state.",
-    },
-    options,
-  );
 }
 
 async function runMainMenu(): Promise<void> {

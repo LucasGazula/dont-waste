@@ -5,7 +5,7 @@ import {
   type Capability,
   type ToolId,
 } from "@dont-waste/catalog";
-import { runCommand } from "./runtime.js";
+import { runCommand, commandHooksFromAdapterContext } from "./runtime.js";
 import type {
   AdapterContext,
   Command,
@@ -73,7 +73,7 @@ export abstract class BaseAdapter implements ToolAdapter {
       const result = await runCommand(
         command,
         context.dryRun,
-        context.beforeCommand ? { beforeCommand: context.beforeCommand } : {},
+        commandHooksFromAdapterContext(context),
       );
       if (result.ran) executed.push(command);
       else skipped.push(command);
