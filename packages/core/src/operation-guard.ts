@@ -11,15 +11,20 @@ export function trackInFlight<T>(promise: Promise<T>): Promise<T> {
   });
 }
 
-/** Wait for tracked children to settle (or until timeout). */
+/** Wait for tracked children to settle (or until timeout). Always clears the timer. */
 export async function waitForInFlight(timeoutMs = 7_000): Promise<void> {
   if (inFlight.size === 0) return;
-  await Promise.race([
-    Promise.allSettled([...inFlight]),
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, timeoutMs);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.allSettled([...inFlight]),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
@@ -31,8 +36,21 @@ export async function failOperationAfterInterrupt(
   operationId: string,
   reason: string,
 ): Promise<void> {
-  await restoreOperation(paths, operationId);
-  await updateOperation(paths, operationId, "failed", reason);
+  let restoreError: Error | undefined;
+  try {
+    await restoreOperation(paths, operationId);
+  } catch (err) {
+    restoreError = err instanceof Error ? err : new Error(String(err));
+    console.error(
+      `Rollback failed during interruption recovery: ${restoreError.message}`,
+    );
+  }
+
+  const finalReason = restoreError
+    ? `${reason} (Rollback failed: ${restoreError.message})`
+    : reason;
+
+  await updateOperation(paths, operationId, "failed", finalReason);
 }
 
 export type OperationGuardControl = {
@@ -50,6 +68,7 @@ export type OperationGuardOptions = {
 /**
  * Run work while SIGINT/SIGTERM abort children first, then rollback+failed.
  * Handlers are always removed on completion or error.
+ * Rollback errors are best-effort (never unhandled rejections).
  */
 export async function withOperationSignalGuards<T>(
   paths: DataPaths,
@@ -60,30 +79,41 @@ export async function withOperationSignalGuards<T>(
   const controller = new AbortController();
   let settled = false;
 
+  const rollbackBestEffort = async (reason: string): Promise<void> => {
+    try {
+      await waitForInFlight(options.settleTimeoutMs ?? 7_000);
+      await failOperationAfterInterrupt(paths, operationId, reason);
+    } catch {
+      /* best-effort: never leave an unhandled rejection on the signal path */
+    }
+  };
+
   const handleInterrupt = async (
     signal: NodeJS.Signals = "SIGINT",
   ): Promise<void> => {
     if (settled) return;
     settled = true;
     controller.abort(signal);
-    await waitForInFlight(options.settleTimeoutMs ?? 7_000);
-    await failOperationAfterInterrupt(
-      paths,
-      operationId,
-      `interrupted by ${signal}`,
-    );
+    await rollbackBestEffort(`interrupted by ${signal}`);
     if (options.exitOnSignal !== false) {
-      process.exitCode = signal === "SIGINT" ? 130 : 143;
+      if (signal === "SIGINT") {
+        process.exitCode = 130;
+      } else if (signal === "SIGHUP") {
+        process.exitCode = 129;
+      } else {
+        process.exitCode = 143;
+      }
       process.exit(process.exitCode);
     }
   };
 
   const onSignal = (signal: NodeJS.Signals) => {
-    void handleInterrupt(signal);
+    void handleInterrupt(signal).catch(() => undefined);
   };
 
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  process.on("SIGHUP", onSignal);
   try {
     return await work({
       signal: controller.signal,
@@ -93,10 +123,7 @@ export async function withOperationSignalGuards<T>(
     if (!settled) {
       settled = true;
       controller.abort(error);
-      await waitForInFlight(options.settleTimeoutMs ?? 7_000);
-      await failOperationAfterInterrupt(
-        paths,
-        operationId,
+      await rollbackBestEffort(
         error instanceof Error ? error.message : String(error),
       );
     }
@@ -104,5 +131,6 @@ export async function withOperationSignalGuards<T>(
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
+    process.off("SIGHUP", onSignal);
   }
 }

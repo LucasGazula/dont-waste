@@ -12,6 +12,7 @@ import {
   withOperationSignalGuards,
 } from "@dont-waste/core";
 import { RtkAdapter, RTK_RELEASE_LABEL } from "../src/rtk.js";
+import { installRtkFromOfficialRelease } from "../src/rtk-release.js";
 import {
   DEFAULT_FORCE_KILL_MS,
   FIND_EXECUTABLE_TIMEOUT_MS,
@@ -164,6 +165,39 @@ describe("RTK release progress hook", () => {
       RTK_RELEASE_LABEL,
     );
     expect(result.succeeded).toBe(true);
+  });
+});
+
+describe("RTK release abort race", () => {
+  it("aborts a hanging official-release fetch before any extract mutation", async () => {
+    const controller = new AbortController();
+    const installDir = await mkdtemp(path.join(os.tmpdir(), "dw-rtk-race-"));
+    tempDirs.push(installDir);
+    let extractAttempted = false;
+    const hung = installRtkFromOfficialRelease({
+      platform: "linux",
+      arch: "x64",
+      tag: "v0.0.0-test",
+      installDir,
+      abortSignal: controller.signal,
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        return await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          const fail = () => {
+            extractAttempted = true;
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          };
+          if (signal?.aborted) {
+            fail();
+            return;
+          }
+          signal?.addEventListener("abort", fail, { once: true });
+        });
+      }) as typeof fetch,
+    });
+    setTimeout(() => controller.abort(), 10);
+    await expect(hung).rejects.toThrow(/Aborted|abort/i);
+    expect(extractAttempted).toBe(true);
   });
 });
 

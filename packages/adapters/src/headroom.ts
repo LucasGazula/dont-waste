@@ -1,3 +1,4 @@
+import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
 import { type AgentId } from "@dont-waste/catalog";
 import { importHeadroomJson } from "@dont-waste/telemetry";
@@ -36,8 +37,8 @@ const mcpAgents: AgentId[] = ["codex", "claude-code", "opencode"];
 export class HeadroomAdapter extends BaseAdapter {
   readonly id = "headroom" as const;
 
-  detect(_context: AdapterContext): ReturnType<typeof executableDetection> {
-    return executableDetection(this.id, "headroom");
+  detect(context: AdapterContext): ReturnType<typeof executableDetection> {
+    return executableDetection(this.id, "headroom", context.abortSignal);
   }
 
   async planInstall(
@@ -47,7 +48,11 @@ export class HeadroomAdapter extends BaseAdapter {
     const detected = await this.detect(context);
     const commands = [];
     if (!detected.detected) {
-      const uv = await findExecutable("uv", context.platform);
+      const uv = await findExecutable(
+        "uv",
+        context.platform,
+        context.abortSignal,
+      );
       commands.push(
         uv
           ? {
@@ -126,7 +131,11 @@ export class HeadroomAdapter extends BaseAdapter {
   ): Promise<InstallResult> {
     const base = await super.install(plan, context);
     if (!base.succeeded || context.dryRun) return base;
-    const headroomPath = await findExecutable("headroom", context.platform);
+    const headroomPath = await findExecutable(
+      "headroom",
+      context.platform,
+      context.abortSignal,
+    );
     if (!headroomPath) {
       return {
         ...base,
@@ -171,11 +180,14 @@ export class HeadroomAdapter extends BaseAdapter {
       ];
     const checks: HealthCheck[] = [];
     try {
-      const doctor = await execa("headroom", ["doctor"], {
-        reject: false,
-        timeout: 15_000,
-        forceKillAfterDelay: 5_000,
-      });
+      const doctor = await trackInFlight(
+        execa("headroom", ["doctor"], {
+          reject: false,
+          timeout: 15_000,
+          forceKillAfterDelay: 5_000,
+          ...(context.abortSignal ? { cancelSignal: context.abortSignal } : {}),
+        }),
+      );
       checks.push({
         id: "headroom-doctor",
         status: doctor.exitCode === 0 ? "pass" : "warn",
@@ -252,7 +264,7 @@ export class HeadroomAdapter extends BaseAdapter {
     return checks;
   }
 
-  async collectMetrics(): Promise<MetricImportResult> {
+  async collectMetrics(context: AdapterContext): Promise<MetricImportResult> {
     const attempts: Array<{ source: string; args: string[] }> = [
       { source: "headroom perf", args: ["perf", "--format", "json"] },
       {
@@ -264,11 +276,16 @@ export class HeadroomAdapter extends BaseAdapter {
     const errors: string[] = [];
     for (const attempt of attempts) {
       try {
-        const result = await execa("headroom", attempt.args, {
-          reject: false,
-          timeout: 15_000,
-          forceKillAfterDelay: 5_000,
-        });
+        const result = await trackInFlight(
+          execa("headroom", attempt.args, {
+            reject: false,
+            timeout: 15_000,
+            forceKillAfterDelay: 5_000,
+            ...(context.abortSignal
+              ? { cancelSignal: context.abortSignal }
+              : {}),
+          }),
+        );
         if (result.exitCode === 0 && result.stdout.trim()) {
           return {
             source: attempt.source,

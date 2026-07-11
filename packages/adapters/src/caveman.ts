@@ -105,7 +105,11 @@ export class CavemanAdapter extends BaseAdapter {
   readonly id = "caveman" as const;
 
   async detect(context: AdapterContext): Promise<DetectionResult> {
-    const node = await findExecutable("node");
+    const node = await findExecutable(
+      "node",
+      process.platform,
+      context.abortSignal,
+    );
     const markers: string[] = [];
     for (const file of cavemanDetectPaths(context.home)) {
       try {

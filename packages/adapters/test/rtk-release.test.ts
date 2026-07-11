@@ -6,12 +6,13 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   findExtractedBinary,
+  fetchWithTimeout,
   installRtkFromOfficialRelease,
   parseChecksumLine,
   resolveRtkTarget,
   sha256,
 } from "../src/rtk-release.js";
-import { rtkInitArgs } from "../src/rtk.js";
+import { rtkInitArgs, RtkAdapter, RTK_RELEASE_LABEL } from "../src/rtk.js";
 
 function tarOfSingleFile(name: string, content: string): Buffer {
   const data = Buffer.from(content, "utf8");
@@ -118,5 +119,85 @@ describe("rtk official release install", () => {
     expect(result.binaryPath).toBe(path.join(installDir, "rtk"));
     await access(result.binaryPath);
     expect(createHash("sha256").update(archive).digest("hex")).toBe(digest);
+  });
+
+  it("aborts fetchWithTimeout when the external signal fires", async () => {
+    const controller = new AbortController();
+    const fetchImpl = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          return;
+        }
+        signal?.addEventListener(
+          "abort",
+          () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          },
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+
+    const pending = fetchWithTimeout(
+      "https://example.test/rtk",
+      fetchImpl,
+      {},
+      controller.signal,
+    );
+    controller.abort();
+    await expect(pending).rejects.toThrow(/Aborted while fetching/);
+  });
+
+  it("refuses official-release install when abortSignal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let fetched = false;
+    await expect(
+      installRtkFromOfficialRelease({
+        platform: "linux",
+        arch: "x64",
+        tag: "v0.0.0-test",
+        installDir: await mkdtemp(path.join(os.tmpdir(), "dont-waste-rtk-ab-")),
+        abortSignal: controller.signal,
+        fetchImpl: (async () => {
+          fetched = true;
+          return new Response("nope");
+        }) as typeof fetch,
+      }),
+    ).rejects.toThrow(/aborted/i);
+    expect(fetched).toBe(false);
+  });
+
+  it("passes AdapterContext.abortSignal into the official-release install path", async () => {
+    const adapter = new RtkAdapter();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await adapter.install(
+      {
+        tool: "rtk",
+        selection: { mode: "full", features: {} },
+        commands: [
+          {
+            command: "dont-waste-internal",
+            args: ["rtk-release-install", "fake"],
+            label: RTK_RELEASE_LABEL,
+          },
+        ],
+        warnings: [],
+        affectedPaths: [],
+        capabilities: [],
+      },
+      {
+        platform: process.platform,
+        home: os.tmpdir(),
+        selectedAgents: ["codex"],
+        dryRun: false,
+        abortSignal: controller.signal,
+      },
+    );
+    expect(result.succeeded).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/abort/i);
   });
 });

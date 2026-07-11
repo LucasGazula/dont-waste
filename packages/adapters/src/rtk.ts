@@ -1,3 +1,4 @@
+import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
 import type { AgentId } from "@dont-waste/catalog";
 import { importRtkJson } from "@dont-waste/telemetry";
@@ -41,8 +42,8 @@ export { RTK_RELEASE_LABEL };
 
 export class RtkAdapter extends BaseAdapter {
   readonly id = "rtk" as const;
-  detect(_context: AdapterContext): ReturnType<typeof executableDetection> {
-    return executableDetection(this.id, "rtk");
+  detect(context: AdapterContext): ReturnType<typeof executableDetection> {
+    return executableDetection(this.id, "rtk", context.abortSignal);
   }
 
   async planInstall(
@@ -54,7 +55,7 @@ export class RtkAdapter extends BaseAdapter {
     if (!detected.detected) {
       if (
         context.platform === "darwin" &&
-        (await findExecutable("brew", context.platform))
+        (await findExecutable("brew", context.platform, context.abortSignal))
       ) {
         commands.push({
           command: "brew",
@@ -122,9 +123,16 @@ export class RtkAdapter extends BaseAdapter {
           const installed = await installRtkFromOfficialRelease({
             platform: context.platform,
             dryRun: false,
+            abortSignal: context.abortSignal,
           });
           executed.push(command);
-          if (!(await findExecutable("rtk", context.platform))) {
+          if (
+            !(await findExecutable(
+              "rtk",
+              context.platform,
+              context.abortSignal,
+            ))
+          ) {
             errors.push(
               `RTK installed to ${installed.binaryPath} but is not on PATH. Add ~/.local/bin to PATH and rerun.`,
             );
@@ -175,11 +183,14 @@ export class RtkAdapter extends BaseAdapter {
       },
     ];
     try {
-      const gain = await execa("rtk", ["gain", "--all", "--format", "json"], {
-        reject: false,
-        timeout: 15_000,
-        forceKillAfterDelay: 5_000,
-      });
+      const gain = await trackInFlight(
+        execa("rtk", ["gain", "--all", "--format", "json"], {
+          reject: false,
+          timeout: 15_000,
+          forceKillAfterDelay: 5_000,
+          ...(context.abortSignal ? { cancelSignal: context.abortSignal } : {}),
+        }),
+      );
       checks.push({
         id: "rtk-gain",
         status: gain.exitCode === 0 ? "pass" : "warn",
@@ -198,13 +209,16 @@ export class RtkAdapter extends BaseAdapter {
     return checks;
   }
 
-  async collectMetrics(): Promise<MetricImportResult> {
+  async collectMetrics(context: AdapterContext): Promise<MetricImportResult> {
     try {
-      const result = await execa("rtk", ["gain", "--all", "--format", "json"], {
-        reject: false,
-        timeout: 15_000,
-        forceKillAfterDelay: 5_000,
-      });
+      const result = await trackInFlight(
+        execa("rtk", ["gain", "--all", "--format", "json"], {
+          reject: false,
+          timeout: 15_000,
+          forceKillAfterDelay: 5_000,
+          ...(context.abortSignal ? { cancelSignal: context.abortSignal } : {}),
+        }),
+      );
       if (result.exitCode !== 0)
         return {
           source: "rtk gain",

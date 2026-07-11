@@ -475,7 +475,7 @@ async function applyPlan(
         tool: item.tool,
         checks: await adapters[item.tool].verify(
           plan.request.selections[item.tool]!,
-          context(plan.request.selectedAgents, false),
+          context(plan.request.selectedAgents, false, undefined, signal),
         ),
       })),
     );
@@ -532,7 +532,7 @@ async function applyPlan(
         }
       }
       const detection = await adapters[item.tool].detect(
-        context(plan.request.selectedAgents, false),
+        context(plan.request.selectedAgents, false, undefined, signal),
       );
       const version = nodeBackedTools.has(item.tool)
         ? undefined

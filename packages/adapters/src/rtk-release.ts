@@ -11,10 +11,13 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
 
 const REPO = "rtk-ai/rtk";
 const FETCH_TIMEOUT_MS = 30_000;
+const EXTRACT_TIMEOUT_MS = 60_000;
+const EXTRACT_FORCE_KILL_MS = 5_000;
 
 export type RtkTarget = {
   asset: string;
@@ -62,27 +65,42 @@ export function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-async function fetchWithTimeout(
+/** Compose an optional external AbortSignal with the fetch timeout. */
+export async function fetchWithTimeout(
   url: string,
   fetchImpl: typeof fetch,
   init: RequestInit = {},
+  externalSignal?: AbortSignal,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const onExternalAbort = () => {
+    controller.abort(externalSignal?.reason);
+  };
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort(externalSignal.reason);
+    else
+      externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
   try {
     return await fetchImpl(url, { ...init, signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
+      if (externalSignal?.aborted) {
+        throw new Error(`Aborted while fetching ${url}`);
+      }
       throw new Error(`Timed out after ${FETCH_TIMEOUT_MS}ms fetching ${url}`);
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
   }
 }
 
 export async function fetchLatestRtkTag(
   fetchImpl: typeof fetch = fetch,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const response = await fetchWithTimeout(
     `https://api.github.com/repos/${REPO}/releases/latest`,
@@ -93,6 +111,7 @@ export async function fetchLatestRtkTag(
         "User-Agent": "dont-waste",
       },
     },
+    abortSignal,
   );
   if (!response.ok)
     throw new Error(`GitHub releases/latest failed: ${response.status}`);
@@ -134,6 +153,7 @@ export type InstallRtkOptions = {
   tag?: string;
   fetchImpl?: typeof fetch;
   dryRun?: boolean;
+  abortSignal?: AbortSignal | undefined;
 };
 
 export type InstallRtkResult = {
@@ -144,14 +164,33 @@ export type InstallRtkResult = {
   dryRun: boolean;
 };
 
+function extractOptions(abortSignal?: AbortSignal) {
+  return {
+    reject: true as const,
+    timeout: EXTRACT_TIMEOUT_MS,
+    forceKillAfterDelay: EXTRACT_FORCE_KILL_MS,
+    ...(abortSignal ? { cancelSignal: abortSignal } : {}),
+  };
+}
+
+async function runExtract(
+  file: string,
+  args: string[],
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  await trackInFlight(execa(file, args, extractOptions(abortSignal)));
+}
+
 export async function installRtkFromOfficialRelease(
   options: InstallRtkOptions = {},
 ): Promise<InstallRtkResult> {
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const abortSignal = options.abortSignal;
+  if (abortSignal?.aborted) throw new Error("RTK release install aborted");
   const target = resolveRtkTarget(platform, arch);
-  const tag = options.tag ?? (await fetchLatestRtkTag(fetchImpl));
+  const tag = options.tag ?? (await fetchLatestRtkTag(fetchImpl, abortSignal));
   const installDir =
     options.installDir ?? path.join(os.homedir(), ".local", "bin");
   const binaryName = platform === "win32" ? "rtk.exe" : "rtk";
@@ -170,12 +209,18 @@ export async function installRtkFromOfficialRelease(
   }
 
   const [archiveResponse, checksumsResponse] = await Promise.all([
-    fetchWithTimeout(archiveUrl, fetchImpl, {
-      headers: { "User-Agent": "dont-waste" },
-    }),
-    fetchWithTimeout(checksumsUrl, fetchImpl, {
-      headers: { "User-Agent": "dont-waste" },
-    }),
+    fetchWithTimeout(
+      archiveUrl,
+      fetchImpl,
+      { headers: { "User-Agent": "dont-waste" } },
+      abortSignal,
+    ),
+    fetchWithTimeout(
+      checksumsUrl,
+      fetchImpl,
+      { headers: { "User-Agent": "dont-waste" } },
+      abortSignal,
+    ),
   ]);
   if (!archiveResponse.ok)
     throw new Error(
@@ -198,45 +243,43 @@ export async function installRtkFromOfficialRelease(
     );
   }
 
+  if (abortSignal?.aborted) throw new Error("RTK release install aborted");
+
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dont-waste-rtk-"));
   try {
     const archivePath = path.join(tempDir, target.asset);
     await writeFile(archivePath, archive);
     if (target.archiveKind === "tar.gz") {
-      await execa("tar", ["-xzf", archivePath, "-C", tempDir], {
-        reject: true,
-        timeout: 60_000,
-        forceKillAfterDelay: 5_000,
-      });
+      await runExtract(
+        "tar",
+        ["-xzf", archivePath, "-C", tempDir],
+        abortSignal,
+      );
     } else if (platform === "win32") {
       // Prefer tar (available on modern Windows); fall back to PowerShell Expand-Archive.
       try {
-        await execa("tar", ["-xf", archivePath, "-C", tempDir], {
-          reject: true,
-          timeout: 60_000,
-          forceKillAfterDelay: 5_000,
-        });
+        await runExtract(
+          "tar",
+          ["-xf", archivePath, "-C", tempDir],
+          abortSignal,
+        );
       } catch {
-        await execa(
+        await runExtract(
           "powershell",
           [
             "-NoProfile",
             "-Command",
             `Expand-Archive -LiteralPath '${archivePath.replaceAll("'", "''")}' -DestinationPath '${tempDir.replaceAll("'", "''")}' -Force`,
           ],
-          {
-            reject: true,
-            timeout: 60_000,
-            forceKillAfterDelay: 5_000,
-          },
+          abortSignal,
         );
       }
     } else {
-      await execa("unzip", ["-o", archivePath, "-d", tempDir], {
-        reject: true,
-        timeout: 60_000,
-        forceKillAfterDelay: 5_000,
-      });
+      await runExtract(
+        "unzip",
+        ["-o", archivePath, "-d", tempDir],
+        abortSignal,
+      );
     }
     const extracted = await findExtractedBinary(tempDir, binaryName);
     await mkdir(installDir, { recursive: true });

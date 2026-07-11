@@ -184,7 +184,11 @@ export class PonytailAdapter extends BaseAdapter {
   readonly id = "ponytail" as const;
 
   async detect(context: AdapterContext): Promise<DetectionResult> {
-    const node = await findExecutable("node", context.platform);
+    const node = await findExecutable(
+      "node",
+      context.platform,
+      context.abortSignal,
+    );
     const configFile = ponytailConfigPath(context);
     const marker = ponytailActivePath(context);
     let configPresent = false;

@@ -10,6 +10,7 @@ export const FIND_EXECUTABLE_TIMEOUT_MS = 3_000;
 export async function findExecutable(
   command: string,
   platform = process.platform,
+  abortSignal?: AbortSignal,
 ): Promise<string | undefined> {
   try {
     const result = await trackInFlight(
@@ -21,6 +22,7 @@ export async function findExecutable(
           shell: platform !== "win32",
           timeout: FIND_EXECUTABLE_TIMEOUT_MS,
           forceKillAfterDelay: DEFAULT_FORCE_KILL_MS,
+          ...(abortSignal ? { cancelSignal: abortSignal } : {}),
         },
       ),
     );
@@ -34,8 +36,13 @@ export async function findExecutable(
 export async function executableDetection(
   id: string,
   executable: string,
+  abortSignal?: AbortSignal,
 ): Promise<DetectionResult> {
-  const resolved = await findExecutable(executable);
+  const resolved = await findExecutable(
+    executable,
+    process.platform,
+    abortSignal,
+  );
   if (!resolved)
     return { id, detected: false, warnings: [`${executable} is not on PATH`] };
   try {
@@ -44,6 +51,7 @@ export async function executableDetection(
         reject: false,
         timeout: 3_000,
         forceKillAfterDelay: DEFAULT_FORCE_KILL_MS,
+        ...(abortSignal ? { cancelSignal: abortSignal } : {}),
       }),
     );
     const version = (result.stdout || result.stderr).split(/\r?\n/)[0]?.trim();
