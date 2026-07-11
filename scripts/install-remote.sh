@@ -49,9 +49,7 @@ SHIM="$PREFIX/bin/dont-waste"
 printf '\nInstallation complete. Launching Don’t Waste setup…\n'
 
 # curl | bash consumes stdin; attach the real terminal so the TUI can receive input.
-if [ -r /dev/tty ]; then
-  if exec 3</dev/tty 2>/dev/null; then
-    exec "$SHIM" "$@" <&3
-  fi
+if [ -t 1 ] && [ -r /dev/tty ]; then
+  exec "$SHIM" "$@" </dev/tty
 fi
 exec "$SHIM" "$@"
