@@ -176,6 +176,8 @@ export class CavemanAdapter extends BaseAdapter {
               command: "npx",
               args: installArgs(context),
               label: "Run the official Caveman installer for selected agents",
+              timeoutMs: 180_000,
+              forceKillAfterDelay: 5_000,
             },
           ];
     return this.basePlan(

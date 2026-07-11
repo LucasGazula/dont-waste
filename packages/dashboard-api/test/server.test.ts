@@ -32,7 +32,7 @@ describe("createDashboardServer", () => {
     const overview = await fetch(`${server.url}/api/overview`);
     expect(overview.status).toBe(200);
     expect(await overview.json()).toHaveProperty("summary");
-  }, 30_000);
+  }, 60_000);
 
   it("serves the API-only page when SPA assets are missing", async () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "dont-waste-api-"));

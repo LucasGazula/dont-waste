@@ -70,7 +70,11 @@ export abstract class BaseAdapter implements ToolAdapter {
     const skipped: Command[] = [];
     const errors: string[] = [];
     for (const command of plan.commands) {
-      const result = await runCommand(command, context.dryRun);
+      const result = await runCommand(
+        command,
+        context.dryRun,
+        context.beforeCommand ? { beforeCommand: context.beforeCommand } : {},
+      );
       if (result.ran) executed.push(command);
       else skipped.push(command);
       if (result.error) errors.push(result.error);

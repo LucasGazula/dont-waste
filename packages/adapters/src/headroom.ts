@@ -54,11 +54,17 @@ export class HeadroomAdapter extends BaseAdapter {
               command: "uv",
               args: ["tool", "install", "headroom-ai[all]"],
               label: "Install Headroom with uv",
+              env: { UV_NO_PROGRESS: "1" },
+              timeoutMs: 300_000,
+              forceKillAfterDelay: 5_000,
             }
           : {
               command: "python",
               args: ["-m", "pip", "install", "headroom-ai[all]"],
               label: "Install Headroom with pip",
+              env: { PIP_DISABLE_PIP_VERSION_CHECK: "1", PIP_NO_INPUT: "1" },
+              timeoutMs: 300_000,
+              forceKillAfterDelay: 5_000,
             },
       );
     }

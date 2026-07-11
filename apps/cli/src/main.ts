@@ -17,6 +17,7 @@ import {
   configuredToolsFromConfig,
   shouldActivateIntegration,
   type AdapterContext,
+  type Command as AdapterCommand,
   type InstallResult,
   type OperationPlan,
   type ToolSelection,
@@ -36,6 +37,7 @@ import {
   restoreOperation,
   setIntegration,
   updateOperation,
+  withOperationSignalGuards,
   writeConfig,
   type DontWasteConfig,
 } from "@dont-waste/core";
@@ -84,8 +86,18 @@ const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
 /** Caveman/Ponytail detect markers/config; their Node banners are not upstream releases. */
 const nodeBackedTools = new Set<ToolId>(["caveman", "ponytail"]);
 
-function context(selectedAgents: AgentId[], dryRun: boolean): AdapterContext {
-  return { platform: process.platform, home, selectedAgents, dryRun };
+function context(
+  selectedAgents: AgentId[],
+  dryRun: boolean,
+  beforeCommand?: (command: AdapterCommand) => void | Promise<void>,
+): AdapterContext {
+  return {
+    platform: process.platform,
+    home,
+    selectedAgents,
+    dryRun,
+    beforeCommand,
+  };
 }
 function result(value: unknown, options: CommonOptions): void {
   if (options.json) console.log(JSON.stringify(value, null, 2));
@@ -393,6 +405,10 @@ async function applyPlan(
   plan: PlanResult,
   operationType: "init" | "update",
   options: CommonOptions,
+  progress?: {
+    onProgress?: (message: string) => void;
+    beforeCommand?: (command: AdapterCommand) => void | Promise<void>;
+  },
 ): Promise<{ operationId?: string; results: unknown[]; checks: unknown[] }> {
   const paths = getDataPaths();
   if (options.dryRun)
@@ -424,9 +440,11 @@ async function applyPlan(
     errors: string[];
     skippedInteractive: string[];
   }> = [];
-  try {
+
+  return withOperationSignalGuards(paths, operation.id, async () => {
     const installByTool = new Map<ToolId, InstallResult>();
     for (const toolPlan of plan.plans) {
+      progress?.onProgress?.(`Installing ${toolPlan.tool}…`);
       const installed = await adapters[toolPlan.tool].install(
         toolPlan,
         context(
@@ -434,6 +452,7 @@ async function applyPlan(
             ? []
             : plan.request.selectedAgents,
           false,
+          progress?.beforeCommand,
         ),
       );
       installByTool.set(toolPlan.tool, installed);
@@ -447,6 +466,7 @@ async function applyPlan(
       });
       if (!installed.succeeded) throw new Error(installed.errors.join("; "));
     }
+    progress?.onProgress?.("Verifying integrations…");
     const checks = await Promise.all(
       plan.plans.map(async (item) => ({
         tool: item.tool,
@@ -532,16 +552,7 @@ async function applyPlan(
     await writeConfig(paths, config);
     await updateOperation(paths, operation.id, "succeeded");
     return { operationId: operation.id, results, checks };
-  } catch (error) {
-    await restoreOperation(paths, operation.id);
-    await updateOperation(
-      paths,
-      operation.id,
-      "failed",
-      error instanceof Error ? error.message : String(error),
-    );
-    throw error;
-  }
+  });
 }
 
 async function collect(paths = getDataPaths()): Promise<{
@@ -782,14 +793,43 @@ async function runInit(options: InitOptions): Promise<void> {
     }
   }
   const work = !options.json && !options.dryRun ? spinner() : undefined;
-  work?.start("Applying plan");
-  const applied = await applyPlan(setup, "init", options);
-  work?.stop("Plan finished");
-  result({ plan: setup, ...applied }, options);
-  if (!options.json && !options.dryRun)
-    outro(
-      `Done. Operation ${applied.operationId}. Run dont-waste collect after using an enabled agent.`,
-    );
+  let spinnerActive = false;
+  const stopSpinner = (message?: string) => {
+    if (!work || !spinnerActive) return;
+    work.stop(message);
+    spinnerActive = false;
+  };
+  const startSpinner = (message: string) => {
+    if (!work) return;
+    if (spinnerActive) work.stop();
+    work.start(message);
+    spinnerActive = true;
+  };
+  try {
+    startSpinner("Applying plan");
+    const applied = await applyPlan(setup, "init", options, {
+      onProgress: (message) => startSpinner(message),
+      beforeCommand: async (command) => {
+        // Stop spinner so inherited stdio / prompts are visible; skip note for dry paths.
+        stopSpinner(
+          command.interactive
+            ? `Skipping interactive: ${command.label}`
+            : `Running: ${command.label}`,
+        );
+      },
+    });
+    stopSpinner("Plan finished");
+    result({ plan: setup, ...applied }, options);
+    if (!options.json && !options.dryRun)
+      outro(
+        `Done. Operation ${applied.operationId}. Run dont-waste collect after using an enabled agent.`,
+      );
+  } catch (error) {
+    stopSpinner("Plan failed");
+    throw error;
+  } finally {
+    stopSpinner();
+  }
 }
 
 async function runStatus(options: CommonOptions): Promise<void> {

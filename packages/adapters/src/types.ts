@@ -9,6 +9,17 @@ export type Command = {
   /** Interactive/skipped commands with optional=true do not block integration activation. */
   optional?: boolean | undefined;
   shell?: boolean | undefined;
+  /** Extra env for this child only (merged over process.env). */
+  env?: Record<string, string> | undefined;
+  /** Kill the child after this many ms (default applied in runCommand). */
+  timeoutMs?: number | undefined;
+  /** execa forceKillAfterDelay; default 5000 when timeout is set. */
+  forceKillAfterDelay?: number | false | undefined;
+};
+
+export type RunCommandHooks = {
+  /** Called before skip/spawn so the CLI can stop a spinner and show progress. */
+  beforeCommand?: ((command: Command) => void | Promise<void>) | undefined;
 };
 
 export type DetectionResult = {
@@ -31,6 +42,8 @@ export type AdapterContext = {
   home: string;
   selectedAgents: AgentId[];
   dryRun: boolean;
+  /** Stop UI spinners / print progress before each planned command. */
+  beforeCommand?: ((command: Command) => void | Promise<void>) | undefined;
 };
 
 export type ToolSelection = { mode: Mode; features: Record<string, boolean> };

@@ -1,5 +1,9 @@
 import { execa } from "execa";
-import type { Command, DetectionResult } from "./types.js";
+import type { Command, DetectionResult, RunCommandHooks } from "./types.js";
+
+/** Default bound for non-interactive upstream installers (avoids infinite prompt hangs). */
+export const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
+export const DEFAULT_FORCE_KILL_MS = 5_000;
 
 export async function findExecutable(
   command: string,
@@ -56,13 +60,37 @@ export async function executableDetection(
 export async function runCommand(
   command: Command,
   dryRun: boolean,
+  hooks: RunCommandHooks = {},
 ): Promise<{ ran: boolean; error?: string }> {
+  await hooks.beforeCommand?.(command);
   if (dryRun || command.interactive) return { ran: false };
+
+  const timeout =
+    command.timeoutMs === undefined
+      ? DEFAULT_COMMAND_TIMEOUT_MS
+      : command.timeoutMs;
+  const forceKillAfterDelay =
+    command.forceKillAfterDelay === undefined
+      ? DEFAULT_FORCE_KILL_MS
+      : command.forceKillAfterDelay;
+
   const result = await execa(command.command, command.args, {
     reject: false,
     shell: command.shell ?? false,
     stdio: "inherit",
+    ...(command.env
+      ? { env: { ...process.env, ...command.env } as NodeJS.ProcessEnv }
+      : {}),
+    timeout,
+    forceKillAfterDelay,
   });
+
+  if (result.timedOut) {
+    return {
+      ran: true,
+      error: `${command.label} timed out after ${timeout}ms (possible interactive prompt or hang)`,
+    };
+  }
   return result.exitCode === 0
     ? { ran: true }
     : { ran: true, error: `${command.label} exited with ${result.exitCode}` };

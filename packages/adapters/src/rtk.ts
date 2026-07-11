@@ -53,6 +53,9 @@ export class RtkAdapter extends BaseAdapter {
           command: "brew",
           args: ["install", "rtk"],
           label: "Install RTK with Homebrew",
+          env: { HOMEBREW_NO_AUTO_UPDATE: "1", NONINTERACTIVE: "1" },
+          timeoutMs: 300_000,
+          forceKillAfterDelay: 5_000,
         });
       } else {
         const target = resolveRtkTarget(context.platform);
@@ -68,6 +71,11 @@ export class RtkAdapter extends BaseAdapter {
         command: "rtk",
         args: rtkInitArgs(agent),
         label: `Enable RTK hook for ${agent}`,
+        // Avoid rtk init telemetry consent hang during orchestrated apply.
+        // Users can still opt in later via `rtk telemetry enable`.
+        env: { RTK_TELEMETRY_DISABLED: "1" },
+        timeoutMs: 120_000,
+        forceKillAfterDelay: 5_000,
       });
     }
     return this.basePlan(
@@ -116,7 +124,11 @@ export class RtkAdapter extends BaseAdapter {
         }
         continue;
       }
-      const result = await runCommand(command, context.dryRun);
+      const result = await runCommand(
+        command,
+        context.dryRun,
+        context.beforeCommand ? { beforeCommand: context.beforeCommand } : {},
+      );
       if (result.ran) executed.push(command);
       else skipped.push(command);
       if (result.error) {
