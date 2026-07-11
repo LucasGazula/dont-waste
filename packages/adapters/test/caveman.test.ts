@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -82,5 +82,22 @@ describe("caveman adapter planning", () => {
     expect(uninstalled.succeeded).toBe(true);
     // config.json should be removed since it was owned by don't waste
     await expect(readFile(configPath, "utf8")).rejects.toThrow();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("passes abortSignal to findExecutable in verify", async () => {
+    const adapter = new CavemanAdapter();
+    const controller = new AbortController();
+    const checks = await adapter.verify(
+      { mode: "full", features: {} },
+      {
+        platform: "linux",
+        home: os.tmpdir(),
+        selectedAgents: [],
+        dryRun: true,
+        abortSignal: controller.signal,
+      },
+    );
+    expect(checks.find((c) => c.id === "caveman-node")).toBeDefined();
   });
 });

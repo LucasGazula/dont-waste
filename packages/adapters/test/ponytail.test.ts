@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -40,5 +40,22 @@ describe("ponytail mode persistence", () => {
     expect(checks.find((check) => check.id === "ponytail-mode")).toMatchObject({
       status: "pass",
     });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("passes abortSignal to findExecutable in verify", async () => {
+    const adapter = new PonytailAdapter();
+    const controller = new AbortController();
+    const checks = await adapter.verify(
+      { mode: "full", features: {} },
+      {
+        platform: "linux",
+        home: os.tmpdir(),
+        selectedAgents: [],
+        dryRun: true,
+        abortSignal: controller.signal,
+      },
+    );
+    expect(checks.find((c) => c.id === "ponytail-node")).toBeDefined();
   });
 });

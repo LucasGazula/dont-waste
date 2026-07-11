@@ -247,7 +247,7 @@ export class CavemanAdapter extends BaseAdapter {
   ): Promise<HealthCheck[]> {
     const node = await findExecutable(
       "node",
-      process.platform,
+      context.platform,
       context.abortSignal,
     );
     const checks: HealthCheck[] = [
