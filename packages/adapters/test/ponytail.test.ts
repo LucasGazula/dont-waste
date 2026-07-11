@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -58,4 +58,80 @@ describe("ponytail mode persistence", () => {
     );
     expect(checks.find((c) => c.id === "ponytail-node")).toBeDefined();
   });
+
+  it("does not fail when Codex already has the Ponytail marketplace", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    const adapter = new PonytailAdapter();
+    const context = {
+      platform: "linux" as const,
+      home,
+      selectedAgents: ["codex" as const],
+      dryRun: false,
+    };
+    const plan = await adapter.planInstall(
+      { mode: "full" as const, features: {} },
+      context,
+    );
+
+    expect(plan.commands[0]).toMatchObject({
+      label: "Add Ponytail marketplace to Codex",
+      optional: true,
+    });
+
+    const result = await adapter.install(
+      {
+        ...plan,
+        commands: [
+          {
+            ...plan.commands[0],
+            command: process.execPath,
+            args: ["-e", "process.exit(1)"],
+          },
+          ...plan.commands.slice(1),
+        ],
+      },
+      context,
+    );
+
+    expect(result.succeeded).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.skipped).toHaveLength(1);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("does not re-register the marketplace for an existing Ponytail install", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    await mkdir(path.join(home, ".config", "ponytail"), { recursive: true });
+    await writeFile(
+      path.join(home, ".config", "ponytail", "config.json"),
+      JSON.stringify({ defaultMode: "full" }),
+      "utf8",
+    );
+
+    const plan = await new PonytailAdapter().planInstall(
+      { mode: "full" as const, features: {} },
+      {
+        platform: "linux" as const,
+        home,
+        selectedAgents: ["codex" as const],
+        dryRun: false,
+      },
+    );
+
+    expect(plan.commands.some((command) => isMarketplaceCommand(command))).toBe(
+      false,
+    );
+    expect(plan.warnings).toContain(
+      "Existing Ponytail install detected; marketplace registration is skipped and existing sources are preserved.",
+    );
+    await rm(home, { recursive: true, force: true });
+  });
 });
+
+function isMarketplaceCommand(command: { args: string[] }): boolean {
+  return (
+    command.args[0] === "plugin" &&
+    command.args[1] === "marketplace" &&
+    command.args[2] === "add"
+  );
+}

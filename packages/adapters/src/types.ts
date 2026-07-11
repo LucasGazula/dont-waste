@@ -6,7 +6,7 @@ export type Command = {
   args: string[];
   label: string;
   interactive?: boolean | undefined;
-  /** Interactive/skipped commands with optional=true do not block integration activation. */
+  /** Optional commands may fail without aborting the operation; optional interactive commands also do not block activation. */
   optional?: boolean | undefined;
   shell?: boolean | undefined;
   /** Extra env for this child only (merged over process.env). */

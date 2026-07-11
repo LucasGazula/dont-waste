@@ -37,6 +37,7 @@ function commandsFor(agent: AgentId): Command[] {
         command: "codex",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Codex",
+        optional: true,
       },
       {
         command: "codex",
@@ -52,6 +53,7 @@ function commandsFor(agent: AgentId): Command[] {
         command: "claude",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Claude Code",
+        optional: true,
       },
       {
         command: "claude",
@@ -65,6 +67,7 @@ function commandsFor(agent: AgentId): Command[] {
         command: "copilot",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Copilot CLI",
+        optional: true,
       },
       {
         command: "copilot",
@@ -105,6 +108,14 @@ function commandsFor(agent: AgentId): Command[] {
       },
     ];
   return [];
+}
+
+function isMarketplaceRegistration(command: Command): boolean {
+  return (
+    command.args[0] === "plugin" &&
+    command.args[1] === "marketplace" &&
+    command.args[2] === "add"
+  );
 }
 
 function uninstallCommandsFor(agent: AgentId): Command[] {
@@ -230,7 +241,13 @@ export class PonytailAdapter extends BaseAdapter {
     selection: ToolSelection,
     context: AdapterContext,
   ): Promise<OperationPlan> {
-    const commands = context.selectedAgents.flatMap(commandsFor);
+    const detected = await this.detect(context);
+    const commands = context.selectedAgents.flatMap((agent) => {
+      const planned = commandsFor(agent);
+      return detected.detected
+        ? planned.filter((command) => !isMarketplaceRegistration(command))
+        : planned;
+    });
     const affectedPaths = context.selectedAgents.length
       ? [
           ponytailConfigPath(context),
@@ -252,6 +269,13 @@ export class PonytailAdapter extends BaseAdapter {
         "Codex hook approval is intentionally manual: Don’t Waste will not trust hooks on your behalf.",
         context.selectedAgents.includes("opencode")
           ? "OpenCode receives @dietrichgebert/ponytail in opencode.json during install."
+          : "",
+        context.selectedAgents.some((agent) =>
+          ["codex", "claude-code", "copilot-cli"].includes(agent),
+        )
+          ? detected.detected
+            ? "Existing Ponytail install detected; marketplace registration is skipped and existing sources are preserved."
+            : "Ponytail marketplace registration is best-effort; existing marketplace sources are preserved."
           : "",
       ].filter(Boolean),
       affectedPaths,
