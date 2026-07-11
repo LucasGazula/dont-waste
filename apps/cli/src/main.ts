@@ -69,6 +69,12 @@ type InitOptions = CommonOptions & {
 };
 type DashboardOptions = CommonOptions & { port?: string; open: boolean };
 type Profile = "balanced" | "maximum-savings" | "custom" | "install-only";
+type SetupStage = "profile" | "agents" | "tools" | "channel";
+type SetupState = {
+  profile?: Profile;
+  selectedAgents?: AgentId[];
+  selections?: Record<ToolId, ToolSelection>;
+};
 type InitRequest = {
   profile: Profile;
   channel: "pinned" | "latest";
@@ -132,14 +138,21 @@ function checked<T>(value: T | symbol): T {
 }
 
 class SetupBackSignal extends Error {
-  constructor() {
+  constructor(
+    readonly stage: SetupStage,
+    readonly state: SetupState,
+  ) {
     super("setup back");
     this.name = "SetupBackSignal";
   }
 }
 
-function setupChecked<T>(value: T | symbol): T {
-  if (isCancel(value)) throw new SetupBackSignal();
+function setupCheckedValue<T>(
+  value: T | symbol,
+  stage: SetupStage,
+  state: SetupState,
+): T {
+  if (isCancel(value)) throw new SetupBackSignal(stage, state);
   return value as T;
 }
 function defaultSelections(profile: Profile): Record<ToolId, ToolSelection> {
@@ -192,13 +205,26 @@ async function interactiveRequest(
   options: InitOptions,
   diagnostics: Awaited<ReturnType<typeof detectAgents>>,
 ): Promise<InitRequest> {
+  let resume: SetupStage = "profile";
+  let state: SetupState = {};
   for (;;) {
     try {
-      return await interactiveRequestBody(options, diagnostics);
+      return await interactiveRequestBody(options, diagnostics, resume, state);
     } catch (error) {
       if (!(error instanceof SetupBackSignal)) throw error;
+      state = error.state;
+      resume =
+        error.stage === "profile"
+          ? "profile"
+          : error.stage === "agents"
+            ? "profile"
+            : error.stage === "tools"
+              ? "agents"
+              : error.state.profile === "install-only"
+                ? "agents"
+                : "tools";
       note(
-        "Returning to the setup screen. Review the previous choices again.",
+        `Returning to the previous setup step (${resume}). Existing choices were preserved.`,
         "Back",
       );
     }
@@ -208,6 +234,8 @@ async function interactiveRequest(
 async function interactiveRequestBody(
   options: InitOptions,
   diagnostics: Awaited<ReturnType<typeof detectAgents>>,
+  resume: SetupStage,
+  state: SetupState,
 ): Promise<InitRequest> {
   const detected = diagnostics
     .filter((item) => item.detected || item.existingConfigs.length > 0)
@@ -231,46 +259,67 @@ async function interactiveRequestBody(
       .join("\n"),
     "Environment diagnosis",
   );
-  const checked = setupChecked;
-  const profile = checked(
-    await select({
-      message: "Choose a profile (Esc goes back)",
-      initialValue: options.profile ?? "balanced",
-      options: [
-        {
-          value: "balanced",
-          label: "Balanced",
-          hint: "RTK + Headroom where compatible; Caveman and Ponytail full",
-        },
-        {
-          value: "maximum-savings",
-          label: "Maximum savings",
-          hint: "aggressive output shaping and ultra compact RTK",
-        },
-        { value: "custom", label: "Custom", hint: "choose tools and modes" },
-        {
-          value: "install-only",
-          label: "Install only",
-          hint: "do not activate agent integrations",
-        },
-      ],
-    }),
-  ) as Profile;
-  const selectedAgents = checked(
-    await multiselect({
-      message: "Which detected agents should be configured? (Esc goes back)",
-      options: diagnostics.map((agent) => ({
-        value: agent.agent,
-        label:
-          agents.find((item) => item.id === agent.agent)?.label ?? agent.agent,
-        ...(agent.detected && agent.version
-          ? { hint: agent.version }
-          : { hint: "configuration found" }),
-      })) as never,
-      initialValues: detected,
-    }),
-  ) as AgentId[];
-  const selections = defaultSelections(profile);
+  let stage: SetupStage = resume;
+  let profile = state.profile ?? options.profile ?? "balanced";
+  let selectedAgents = state.selectedAgents ?? detected;
+  let selections = state.selections ?? defaultSelections(profile);
+  const checked = <T>(value: T | symbol): T =>
+    setupCheckedValue(value, stage, {
+      profile,
+      selectedAgents,
+      selections,
+    });
+
+  if (resume === "profile") {
+    stage = "profile";
+    profile = setupCheckedValue(
+      await select({
+        message: "Choose a profile (Esc goes back)",
+        initialValue: profile,
+        options: [
+          {
+            value: "balanced",
+            label: "Balanced",
+            hint: "RTK + Headroom where compatible; Caveman and Ponytail full",
+          },
+          {
+            value: "maximum-savings",
+            label: "Maximum savings",
+            hint: "aggressive output shaping and ultra compact RTK",
+          },
+          { value: "custom", label: "Custom", hint: "choose tools and modes" },
+          {
+            value: "install-only",
+            label: "Install only",
+            hint: "do not activate agent integrations",
+          },
+        ],
+      }),
+      stage,
+      { profile, selectedAgents, selections },
+    ) as Profile;
+    selections = defaultSelections(profile);
+  }
+
+  if (resume === "profile" || resume === "agents") {
+    stage = "agents";
+    selectedAgents = checked(
+      await multiselect({
+        message: "Which detected agents should be configured? (Esc goes back)",
+        options: diagnostics.map((agent) => ({
+          value: agent.agent,
+          label:
+            agents.find((item) => item.id === agent.agent)?.label ??
+            agent.agent,
+          ...(agent.detected && agent.version
+            ? { hint: agent.version }
+            : { hint: "configuration found" }),
+        })) as never,
+        initialValues: selectedAgents,
+      }),
+    ) as AgentId[];
+  }
+  stage = "tools";
   if (profile !== "install-only") {
     for (const tool of toolIds) {
       const current = selections[tool]!;
@@ -383,6 +432,7 @@ async function interactiveRequestBody(
       }
     }
   }
+  stage = "channel";
   const channel = checked(
     await select({
       message: "Update policy (Esc goes back)",
