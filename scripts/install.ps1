@@ -1,5 +1,5 @@
 # Bootstrap the Don’t Waste CLI from a local checkout.
-# Does not configure agents and does not run `dont-waste init`.
+# Does not configure agents until the interactive CLI is launched.
 [CmdletBinding()]
 param(
   [switch]$Help,
@@ -35,14 +35,11 @@ What this does:
 
 What this does NOT do:
   - Does not run the CLI init command or touch agent configs
-  - Does not download a remote one-liner
   - Does not publish to npm or install a global npm package named dont-waste
 
 After bootstrap, run dont-waste (ensure Prefix\bin is on PATH). The TUI still
 asks for confirmation before configuring adapters.
 
-Remote one-liner install will be enabled only when a public Git URL / npm
-package is published.
 "@
 }
 

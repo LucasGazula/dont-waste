@@ -11,6 +11,8 @@ const root = path.resolve(
 );
 const installSh = path.join(root, "scripts/install.sh");
 const installPs1 = path.join(root, "scripts/install.ps1");
+const installRemoteSh = path.join(root, "scripts/install-remote.sh");
+const installRemotePs1 = path.join(root, "scripts/install-remote.ps1");
 
 const tempDirs: string[] = [];
 
@@ -95,6 +97,19 @@ describe("local bootstrap installer seams", () => {
     expect(text).not.toMatch(/dont-waste init @args/);
     expect(text).toMatch(/apps[\\/]cli[\\/]dist[\\/]main\.js/);
     expect(text).toMatch(/Does not run the CLI init command/);
+  });
+
+  it("remote installers download a release archive and launch the TUI", async () => {
+    const unix = await readFile(installRemoteSh, "utf8");
+    const windows = await readFile(installRemotePs1, "utf8");
+    expect(unix).toMatch(/codeload\.github\.com/);
+    expect(unix).toMatch(/scripts\/install\.sh/);
+    expect(unix).toMatch(/\/dev\/tty/);
+    expect(unix).toMatch(/exec \"\$SHIM\"/);
+    expect(windows).toMatch(/codeload\.github\.com/);
+    expect(windows).toMatch(/scripts\\install\.ps1/);
+    expect(windows).toMatch(/dont-waste\.cmd/);
+    expect(windows).toMatch(/& \$Shim/);
   });
 
   it("install.sh links a reversible dont-waste shim under a temp prefix", async () => {

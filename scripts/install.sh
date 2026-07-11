@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bootstrap the Don’t Waste CLI from a local checkout.
-# Does not configure agents and does not run `dont-waste init`.
+# Does not configure agents until the interactive CLI is launched.
 set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -38,8 +38,6 @@ What this does NOT do:
 After bootstrap, run `dont-waste` (ensure PREFIX/bin is on PATH). The TUI still
 asks for confirmation before configuring adapters.
 
-Remote one-liner install will be enabled only when a public Git URL / npm
-package is published.
 EOF
 }
 

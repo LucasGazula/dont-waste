@@ -17,7 +17,23 @@ O que ele faz: planear, instalar/ativar (quando aplicável), validar, recolher m
 | Terminal interativo             | Menu TUI e confirmações de `init` / `uninstall` / `rollback`         |
 | (Opcional) ferramentas upstream | Headroom, RTK, Caveman, Ponytail — só se quiser ativá-las de verdade |
 
-**Distribuição npm global ainda é pendente.** Hoje o caminho suportado é o bootstrap a partir de um checkout local (abaixo). Um one-liner remoto (`curl | bash` / `irm | iex`) só será documentado quando existir URL Git pública ou pacote npm publicado.
+## Instalação com um comando
+
+Com Node.js 22+ instalado, copie um único comando. Ele baixa o código público sem `git clone`, prepara Corepack/pnpm, compila o CLI e abre imediatamente a UI de configuração:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LucasGazula/dont-waste/main/scripts/install-remote.sh | bash
+```
+
+No Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/LucasGazula/dont-waste/main/scripts/install-remote.ps1 | iex
+```
+
+O instalador remoto mantém o checkout em `~/.local/share/dont-waste-install` (ou `%LOCALAPPDATA%\\dont-waste\\installation`) e instala o comando `dont-waste` no prefixo do usuário. A UI abre no mesmo comando; não é necessário clonar o repositório nem executar uma segunda etapa.
+
+Para uma instalação auditável a partir de um checkout existente, use o bootstrap local abaixo.
 
 ### Bootstrap local (comando curto)
 
@@ -49,7 +65,7 @@ Depois: garanta que `PREFIX/bin` está no `PATH`, corra `dont-waste --help`, e u
 
 ## Guias por sistema operativo (a partir do repositório)
 
-Em todos os casos: clone o repo e entre na pasta. Preferência: o bootstrap acima. Alternativa manual: Corepack + pnpm. Os exemplos usam um diretório de dados temporário para não tocar no estado real do utilizador.
+Os guias abaixo descrevem o fluxo de desenvolvimento a partir de um checkout. Para uso normal, prefira os comandos únicos acima. Os exemplos usam um diretório de dados temporário para não tocar no estado real do utilizador.
 
 ### Linux
 
