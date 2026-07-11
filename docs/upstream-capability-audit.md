@@ -1,7 +1,7 @@
 # Auditoria de capacidades upstream × Don’t Waste
 
 **Data:** 2026-07-10  
-**Checkout auditado:** branch `antigravity` @ `0761c39` (`/mnt/c/Users/Lucas/orca/projects/dont_waste`)  
+**Checkout auditado:** branch `antigravity` @ `0761c39` (`/path/to/dont_waste`)  
 **Escopo:** comparar Don’t Waste (README, HANDOFF, `packages/catalog`, adapters, CLI, dashboard, testes) com os quatro upstreams oficiais — **Caveman**, **Ponytail**, **Headroom**, **RTK** — usando apenas fontes primárias (README/docs oficiais, código/CLI, releases GitHub).  
 **Fora de escopo desta auditoria:** alterar README ou código; inventar flags; validar Docker daemon / publish / Playwright.
 

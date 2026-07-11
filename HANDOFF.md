@@ -2,7 +2,7 @@
 
 Data do handoff: 2026-07-10
 Branch: `antigravity`
-Checkout: `/mnt/c/Users/Lucas/orca/projects/dont_waste`
+Checkout: /path/to/dont_waste
 
 ## Objetivo
 

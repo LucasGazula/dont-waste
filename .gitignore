@@ -6,4 +6,20 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 .env
+.env.*
+!.env.example
 
+# Credentials
+*.pem
+*.key
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+id_rsa.pub
+id_dsa.pub
+id_ecdsa.pub
+id_ed25519.pub
+.credentials/
+credentials.json
+client_secret*.json
