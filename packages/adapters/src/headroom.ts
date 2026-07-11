@@ -207,7 +207,8 @@ export class HeadroomAdapter extends BaseAdapter {
       });
     }
     const headroomPath =
-      detection.path ?? (await findExecutable("headroom", context.platform));
+      detection.path ??
+      (await findExecutable("headroom", context.platform, context.abortSignal));
     const expected = headroomPath
       ? headroomMcpSpec(headroomPath, selection.features)
       : undefined;

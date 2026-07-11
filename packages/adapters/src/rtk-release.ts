@@ -181,6 +181,32 @@ async function runExtract(
   await trackInFlight(execa(file, args, extractOptions(abortSignal)));
 }
 
+async function readBodyWithSignal<T>(
+  promise: Promise<T>,
+  abortSignal?: AbortSignal,
+): Promise<T> {
+  if (!abortSignal) return promise;
+  if (abortSignal.aborted) throw new Error("RTK release install aborted");
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(new Error("RTK release install aborted"));
+    };
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    promise
+      .then((val) => {
+        if (abortSignal.aborted) {
+          reject(new Error("RTK release install aborted"));
+        } else {
+          resolve(val);
+        }
+      })
+      .catch(reject)
+      .finally(() => {
+        abortSignal.removeEventListener("abort", onAbort);
+      });
+  });
+}
+
 export async function installRtkFromOfficialRelease(
   options: InstallRtkOptions = {},
 ): Promise<InstallRtkResult> {
@@ -231,11 +257,20 @@ export async function installRtkFromOfficialRelease(
       `Failed to download checksums.txt — refusing to install unverified binary (${checksumsResponse.status})`,
     );
 
-  const archive = Buffer.from(await archiveResponse.arrayBuffer());
-  const expected = parseChecksumLine(
-    await checksumsResponse.text(),
-    target.asset,
+  if (abortSignal?.aborted) throw new Error("RTK release install aborted");
+  const archiveBuffer = await readBodyWithSignal(
+    archiveResponse.arrayBuffer(),
+    abortSignal,
   );
+  if (abortSignal?.aborted) throw new Error("RTK release install aborted");
+  const archive = Buffer.from(archiveBuffer);
+
+  const checksumsText = await readBodyWithSignal(
+    checksumsResponse.text(),
+    abortSignal,
+  );
+  if (abortSignal?.aborted) throw new Error("RTK release install aborted");
+  const expected = parseChecksumLine(checksumsText, target.asset);
   const actual = sha256(archive);
   if (expected !== actual) {
     throw new Error(
@@ -248,7 +283,9 @@ export async function installRtkFromOfficialRelease(
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dont-waste-rtk-"));
   try {
     const archivePath = path.join(tempDir, target.asset);
+    if (abortSignal?.aborted) throw new Error("RTK release install aborted");
     await writeFile(archivePath, archive);
+    if (abortSignal?.aborted) throw new Error("RTK release install aborted");
     if (target.archiveKind === "tar.gz") {
       await runExtract(
         "tar",
@@ -263,7 +300,8 @@ export async function installRtkFromOfficialRelease(
           ["-xf", archivePath, "-C", tempDir],
           abortSignal,
         );
-      } catch {
+      } catch (err) {
+        if (abortSignal?.aborted) throw err;
         await runExtract(
           "powershell",
           [
@@ -281,9 +319,13 @@ export async function installRtkFromOfficialRelease(
         abortSignal,
       );
     }
+    if (abortSignal?.aborted) throw new Error("RTK release install aborted");
     const extracted = await findExtractedBinary(tempDir, binaryName);
+    if (abortSignal?.aborted) throw new Error("RTK release install aborted");
     await mkdir(installDir, { recursive: true });
+    if (abortSignal?.aborted) throw new Error("RTK release install aborted");
     await rename(extracted, binaryPath);
+    if (abortSignal?.aborted) throw new Error("RTK release install aborted");
     if (platform !== "win32") await chmod(binaryPath, 0o755);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

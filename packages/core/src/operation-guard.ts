@@ -83,8 +83,11 @@ export async function withOperationSignalGuards<T>(
     try {
       await waitForInFlight(options.settleTimeoutMs ?? 7_000);
       await failOperationAfterInterrupt(paths, operationId, reason);
-    } catch {
-      /* best-effort: never leave an unhandled rejection on the signal path */
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.error(
+        `Critical: Failed to update operation ${operationId} status to failed after rollback: ${err.message}`,
+      );
     }
   };
 

@@ -293,7 +293,11 @@ export class PonytailAdapter extends BaseAdapter {
     selection: ToolSelection,
     context: AdapterContext,
   ): Promise<HealthCheck[]> {
-    const node = await findExecutable("node", context.platform);
+    const node = await findExecutable(
+      "node",
+      context.platform,
+      context.abortSignal,
+    );
     const expectedMode = resolvePonytailMode(selection.mode);
     const checks: HealthCheck[] = [
       node

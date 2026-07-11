@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -50,6 +50,34 @@ describe("operation signal guard", () => {
     const final = ops.find((item) => item.id === operation.id);
     expect(final?.status).toBe("failed");
     expect(final?.error).toMatch(/SIGINT|interrupted/i);
+  });
+
+  it("takes binary snapshots using base64 and restores them without corruption", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "dw-guard-bin-"));
+    tempDirs.push(dataDir);
+    process.env.DONT_WASTE_DATA_DIR = dataDir;
+    const paths = getDataPaths();
+
+    // Create a mock binary file representing the rtk binary
+    const binaryFile = path.join(dataDir, "rtk");
+    const originalBinaryContent = Buffer.from([0, 1, 2, 3, 255, 128, 64]);
+    await writeFile(binaryFile, originalBinaryContent);
+
+    const operation = await createOperation(
+      paths,
+      "init",
+      { profile: "custom" },
+      [binaryFile],
+    );
+
+    // Mutate/corrupt the binary file
+    await writeFile(binaryFile, Buffer.from("corrupted binary"));
+
+    // Run rollback/fail operation which should restore it
+    await failOperationAfterInterrupt(paths, operation.id, "failed test case");
+
+    const restoredBinaryContent = await readFile(binaryFile);
+    expect(restoredBinaryContent).toEqual(originalBinaryContent);
   });
 
   it("withOperationSignalGuards rolls back when the work throws", async () => {
@@ -135,7 +163,7 @@ describe("operation signal guard", () => {
     }
   });
 
-  it("handles SIGHUP interruption and performs rollback", async () => {
+  it("handles SIGHUP interruption and performs rollback via real emission and verifies cleanup", async () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "dw-guard-hup-"));
     tempDirs.push(dataDir);
     process.env.DONT_WASTE_DATA_DIR = dataDir;
@@ -148,14 +176,36 @@ describe("operation signal guard", () => {
     );
     await updateOperation(paths, operation.id, "running");
 
-    await withOperationSignalGuards(
+    const initialListeners = process.listenerCount("SIGHUP");
+    let resolveWork: () => void = () => {};
+    const workPromise = new Promise<void>((resolve) => {
+      resolveWork = resolve;
+    });
+
+    const guardPromise = withOperationSignalGuards(
       paths,
       operation.id,
-      async ({ interrupt }) => {
-        await interrupt("SIGHUP");
+      async ({ signal }) => {
+        expect(process.listenerCount("SIGHUP")).toBe(initialListeners + 1);
+        signal.addEventListener("abort", () => {
+          resolveWork();
+        });
+        // Emit real SIGHUP event on process
+        process.emit("SIGHUP", "SIGHUP");
+        await workPromise;
+        if (signal.aborted) {
+          throw new Error("interrupted");
+        }
       },
-      { exitOnSignal: false },
+      { exitOnSignal: false, settleTimeoutMs: 100 },
     );
+
+    await guardPromise.catch(() => {});
+
+    // Allow background rollback/updateOperation to completely settle
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(process.listenerCount("SIGHUP")).toBe(initialListeners);
 
     const ops = await listOperations(paths);
     const final = ops.find((item) => item.id === operation.id);

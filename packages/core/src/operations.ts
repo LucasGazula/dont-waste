@@ -41,7 +41,12 @@ export async function createOperation(
   const snapshots: FileSnapshot[] = await Promise.all(
     affectedPaths.map(async (file) => {
       try {
-        return { path: file, contents: await readFile(file, "utf8") };
+        const isBinary = file.endsWith("rtk") || file.endsWith("rtk.exe");
+        const raw = await readFile(file);
+        const contents = isBinary
+          ? raw.toString("base64")
+          : raw.toString("utf8");
+        return { path: file, contents };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT")
           return { path: file, contents: null };
@@ -103,7 +108,12 @@ export async function restoreOperation(
     if (snapshot.contents === null) await rm(snapshot.path, { force: true });
     else {
       await mkdir(path.dirname(snapshot.path), { recursive: true });
-      await writeFile(snapshot.path, snapshot.contents, "utf8");
+      const isBinary =
+        snapshot.path.endsWith("rtk") || snapshot.path.endsWith("rtk.exe");
+      const buffer = isBinary
+        ? Buffer.from(snapshot.contents, "base64")
+        : Buffer.from(snapshot.contents, "utf8");
+      await writeFile(snapshot.path, buffer);
     }
   }
   await updateOperation(paths, id, "rolled-back");

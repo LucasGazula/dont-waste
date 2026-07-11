@@ -1,4 +1,5 @@
 import { trackInFlight } from "@dont-waste/core";
+import path from "node:path";
 import { execa } from "execa";
 import type { AgentId } from "@dont-waste/catalog";
 import { importRtkJson } from "@dont-waste/telemetry";
@@ -52,6 +53,7 @@ export class RtkAdapter extends BaseAdapter {
   ): Promise<OperationPlan> {
     const detected = await this.detect(context);
     const commands: Command[] = [];
+    const affectedPaths: string[] = [];
     if (!detected.detected) {
       if (
         context.platform === "darwin" &&
@@ -72,6 +74,10 @@ export class RtkAdapter extends BaseAdapter {
           args: ["rtk-release-install", target.asset],
           label: RTK_RELEASE_LABEL,
         });
+        const binaryName = context.platform === "win32" ? "rtk.exe" : "rtk";
+        affectedPaths.push(
+          path.join(context.home, ".local", "bin", binaryName),
+        );
       }
     }
     for (const agent of context.selectedAgents) {
@@ -97,6 +103,7 @@ export class RtkAdapter extends BaseAdapter {
         "Non-Homebrew installs download the official GitHub release asset and refuse to continue on checksum mismatch or download timeout.",
         "RTK hooks only rewrite shell/Bash calls. Built-in agent read tools can bypass RTK.",
       ].filter(Boolean),
+      affectedPaths,
     );
   }
 

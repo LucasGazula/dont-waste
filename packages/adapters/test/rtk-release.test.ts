@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -199,5 +199,61 @@ describe("rtk official release install", () => {
     );
     expect(result.succeeded).toBe(false);
     expect(result.errors.join(" ")).toMatch(/abort/i);
+  });
+
+  it("populates affectedPaths with rtk binary path in planInstall when not detected", async () => {
+    const adapter = new RtkAdapter();
+    adapter.detect = async () => ({ id: "rtk", detected: false, warnings: [] });
+    const home = await mkdtemp(path.join(os.tmpdir(), "dw-rtk-plan-"));
+    const plan = await adapter.planInstall(
+      { mode: "full", features: {} },
+      {
+        platform: "linux",
+        home,
+        dryRun: true,
+        selectedAgents: ["codex"],
+      },
+    );
+    expect(plan.affectedPaths).toContain(
+      path.join(home, ".local", "bin", "rtk"),
+    );
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("aborts official-release install when abortSignal fires during arrayBuffer read", async () => {
+    const controller = new AbortController();
+    const asset = "rtk-x86_64-unknown-linux-musl.tar.gz";
+    const installDir = await mkdtemp(path.join(os.tmpdir(), "dw-rtk-ab-buf-"));
+    const pending = installRtkFromOfficialRelease({
+      platform: "linux",
+      arch: "x64",
+      tag: "v0.0.0-test",
+      installDir,
+      abortSignal: controller.signal,
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("checksums.txt")) {
+          return new Response("checksum stuff");
+        }
+        if (url.endsWith(asset)) {
+          return {
+            ok: true,
+            arrayBuffer: async () => {
+              await new Promise<void>((resolve) => {
+                setTimeout(() => {
+                  controller.abort();
+                  resolve();
+                }, 20);
+              });
+              return new ArrayBuffer(8);
+            },
+          } as Response;
+        }
+        throw new Error(`unexpected url ${url}`);
+      }) as typeof fetch,
+    });
+
+    await expect(pending).rejects.toThrow(/abort/i);
+    await rm(installDir, { recursive: true, force: true });
   });
 });
