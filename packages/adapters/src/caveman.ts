@@ -43,6 +43,13 @@ export function cavemanConfigPath(
     : path.join(context.home, ".config", "caveman", "config.json");
 }
 
+export function cavemanCodexSkillPath(
+  context: Pick<AdapterContext, "home">,
+): string {
+  const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+  return path.join(codexHome, "skills", "caveman", "SKILL.md");
+}
+
 async function updateJson(
   file: string,
   transform: (value: Record<string, unknown>) => Record<string, unknown>,
@@ -85,6 +92,33 @@ export function cavemanDetectPaths(home: string): string[] {
     path.join(home, ".claude", ".caveman-active"),
     path.join(home, ".config", "opencode", ".caveman-active"),
   ];
+}
+
+function cavemanMarkerPath(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): string | undefined {
+  if (agent === "claude-code")
+    return path.join(context.home, ".claude", ".caveman-active");
+  if (agent === "opencode")
+    return path.join(context.home, ".config", "opencode", ".caveman-active");
+  return undefined;
+}
+
+async function cavemanAgentInstalled(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): Promise<boolean> {
+  const skillPath =
+    agent === "codex" ? cavemanCodexSkillPath(context) : undefined;
+  const marker = skillPath ?? cavemanMarkerPath(agent, context);
+  if (!marker) return false;
+  try {
+    await access(marker);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function installArgs(context: AdapterContext): string[] {
@@ -160,30 +194,32 @@ export class CavemanAdapter extends BaseAdapter {
     const affectedPaths = cavemanActivePaths(context);
     if (context.selectedAgents.length) {
       affectedPaths.push(cavemanConfigPath(context));
+      if (context.selectedAgents.includes("codex"))
+        affectedPaths.push(cavemanCodexSkillPath(context));
     }
-    const alreadyActive = (
+    const installTargets = (
       await Promise.all(
-        affectedPaths.map(async (file) => {
-          try {
-            return (await readFile(file, "utf8")).trim().length > 0;
-          } catch {
-            return false;
-          }
-        }),
+        context.selectedAgents
+          .filter((agent) => cavemanOnlyId[agent])
+          .map(async (agent) =>
+            (await cavemanAgentInstalled(agent, context)) ? undefined : agent,
+          ),
       )
-    ).some(Boolean);
-    const commands =
-      context.selectedAgents.length === 0 || alreadyActive
-        ? []
-        : [
-            {
-              command: "npx",
-              args: installArgs(context),
-              label: "Run the official Caveman installer for selected agents",
-              timeoutMs: 180_000,
-              forceKillAfterDelay: 5_000,
-            },
-          ];
+    ).filter((agent): agent is AgentId => Boolean(agent));
+    const commands = installTargets.length
+      ? [
+          {
+            command: "npx",
+            args: installArgs({ ...context, selectedAgents: installTargets }),
+            label: "Run the official Caveman installer for selected agents",
+            timeoutMs: 180_000,
+            forceKillAfterDelay: 5_000,
+          },
+        ]
+      : [];
+    const supportedSelected = context.selectedAgents.filter(
+      (agent) => cavemanOnlyId[agent],
+    );
     return this.basePlan(
       selection,
       context,
@@ -191,9 +227,11 @@ export class CavemanAdapter extends BaseAdapter {
       [
         context.selectedAgents.length === 0
           ? "install-only: Caveman binary/skills install may run, but Don’t Waste will not write agent marker files."
-          : alreadyActive
-            ? "Existing Caveman install detected; Don’t Waste will only refresh .caveman-active mode files."
-            : `Caveman mode: ${mode}. Don’t Waste writes this into .caveman-active after install.`,
+          : installTargets.length
+            ? `Caveman mode: ${mode}. Official installer targets: ${installTargets.join(", ")}.`
+            : supportedSelected.length
+              ? "Existing Caveman install detected for the selected agents; Don’t Waste will only refresh mode/config files."
+              : "No selected agent has a Caveman --only target; no upstream installer command was planned.",
         "Caveman session savings are estimates and never enter the measured total.",
         selection.features.statusline
           ? "Statusline savings stay enabled (default Caveman behavior)."
@@ -266,7 +304,26 @@ export class CavemanAdapter extends BaseAdapter {
     ];
     const expected = resolveCavemanMode(selection.mode);
     const modeFiles = cavemanActivePaths(context);
-    if (!modeFiles.length) {
+    if (context.selectedAgents.includes("codex")) {
+      const file = cavemanCodexSkillPath(context);
+      try {
+        await access(file);
+        checks.push({
+          id: "caveman-codex-skill",
+          status: "pass",
+          message: `Codex Caveman skill found at ${file}`,
+        });
+      } catch {
+        checks.push({
+          id: "caveman-codex-skill",
+          status: "fail",
+          message: `Codex Caveman skill is missing at ${file}`,
+          remediation:
+            "Rerun dont-waste init for Codex and start a new session.",
+        });
+      }
+    }
+    if (!modeFiles.length && !context.selectedAgents.includes("codex")) {
       checks.push({
         id: "caveman-mode",
         status: "warn",

@@ -51,6 +51,12 @@ printf '\nInstallation complete. Launching Don’t Waste setup…\n'
 # curl | bash consumes stdin; attach the real terminal so the TUI can receive input.
 TTY_PATH="$(tty </dev/tty 2>/dev/null || true)"
 if [ -n "$TTY_PATH" ] && [ -r "$TTY_PATH" ]; then
+  if [ "$#" -eq 0 ]; then
+    exec "$SHIM" init <"$TTY_PATH"
+  fi
   exec "$SHIM" "$@" <"$TTY_PATH"
+fi
+if [ "$#" -eq 0 ]; then
+  exec "$SHIM" init
 fi
 exec "$SHIM" "$@"

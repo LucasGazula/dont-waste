@@ -41,9 +41,14 @@ function commandsFor(agent: AgentId): Command[] {
       },
       {
         command: "codex",
+        args: ["plugin", "add", "ponytail@ponytail"],
+        label: "Install Ponytail plugin in Codex",
+      },
+      {
+        command: "codex",
         args: [],
         label:
-          "Use /plugins to install Ponytail, then /hooks to review and trust its lifecycle hooks",
+          "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
         interactive: true,
       },
     ];
@@ -266,7 +271,7 @@ export class PonytailAdapter extends BaseAdapter {
         context.selectedAgents.length === 0
           ? "install-only: Don’t Waste will not write Ponytail or agent configuration files."
           : `Ponytail default mode: ${mode}. It keeps validation, error handling, security, and accessibility intact.`,
-        "Codex hook approval is intentionally manual: Don’t Waste will not trust hooks on your behalf.",
+        "Codex hook approval is intentionally manual: Don’t Waste installs the plugin, but you must trust its hooks in /hooks and start a new thread.",
         context.selectedAgents.includes("opencode")
           ? "OpenCode receives @dietrichgebert/ponytail in opencode.json during install."
           : "",

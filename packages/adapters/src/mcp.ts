@@ -97,7 +97,10 @@ function parseCodexServer(
 }
 
 export function codexConfigPath(context: Pick<AdapterContext, "home">): string {
-  return path.join(context.home, ".codex", "config.toml");
+  return path.join(
+    process.env.CODEX_HOME ?? path.join(context.home, ".codex"),
+    "config.toml",
+  );
 }
 
 export function claudeMcpConfigPath(

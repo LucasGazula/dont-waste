@@ -25,8 +25,14 @@ function pathsFor(
       : context.platform === "darwin"
         ? "darwin"
         : "linux";
+  if (definition.id === "codex" && process.env.CODEX_HOME) {
+    return definition.configPaths[group].map((item) =>
+      path.join(process.env.CODEX_HOME!, item.replace(/^~\/\.codex\//, "")),
+    );
+  }
+  const agentHome = context.home;
   return definition.configPaths[group].map((item) =>
-    expandHome(item, context.home),
+    expandHome(item, agentHome),
   );
 }
 

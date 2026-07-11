@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +9,35 @@ import {
 } from "../src/caveman.js";
 
 describe("caveman adapter planning", () => {
+  it("still installs Codex when another selected agent is already active", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
+    await mkdir(path.join(home, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(home, ".claude", ".caveman-active"),
+      "full\n",
+      "utf8",
+    );
+
+    const plan = await new CavemanAdapter().planInstall(
+      { mode: "full", features: {} },
+      {
+        platform: "linux",
+        home,
+        selectedAgents: ["codex", "claude-code"],
+        dryRun: true,
+      },
+    );
+
+    expect(plan.commands).toHaveLength(1);
+    expect(plan.commands[0]?.args).toEqual(
+      expect.arrayContaining(["--only", "codex"]),
+    );
+    expect(plan.commands[0]?.args).not.toEqual(
+      expect.arrayContaining(["--only", "claude"]),
+    );
+    await rm(home, { recursive: true, force: true });
+  });
+
   it("maps agents to official --only ids and persists selected mode", async () => {
     expect(cavemanOnlyId["claude-code"]).toBe("claude");
     expect(cavemanOnlyId.opencode).toBe("opencode");
@@ -99,5 +128,48 @@ describe("caveman adapter planning", () => {
       },
     );
     expect(checks.find((c) => c.id === "caveman-node")).toBeDefined();
+  });
+
+  it("verifies the Codex skill under CODEX_HOME", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
+    const codexHome = path.join(home, "codex-home");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const adapter = new CavemanAdapter();
+      const context = {
+        platform: "linux" as const,
+        home,
+        selectedAgents: ["codex" as const],
+        dryRun: true,
+      };
+      const missing = await adapter.verify(
+        { mode: "full", features: {} },
+        context,
+      );
+      expect(
+        missing.find((check) => check.id === "caveman-codex-skill"),
+      ).toMatchObject({ status: "fail" });
+
+      await mkdir(path.join(codexHome, "skills", "caveman"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(codexHome, "skills", "caveman", "SKILL.md"),
+        "---\nname: caveman\n---\n",
+        "utf8",
+      );
+      const installed = await adapter.verify(
+        { mode: "full", features: {} },
+        context,
+      );
+      expect(
+        installed.find((check) => check.id === "caveman-codex-skill"),
+      ).toMatchObject({ status: "pass" });
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

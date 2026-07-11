@@ -87,7 +87,13 @@ describe("ponytail mode persistence", () => {
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
           },
-          ...plan.commands.slice(1),
+          ...plan.commands.slice(1, 2).map((command) => ({
+            ...command,
+            command: process.execPath,
+            args: ["-e", "process.exit(0)"],
+            interactive: false,
+          })),
+          ...plan.commands.slice(2),
         ],
       },
       context,
@@ -95,7 +101,39 @@ describe("ponytail mode persistence", () => {
 
     expect(result.succeeded).toBe(true);
     expect(result.errors).toEqual([]);
+    expect(result.executed).toHaveLength(2);
     expect(result.skipped).toHaveLength(1);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("uses Ponytail's official non-interactive Codex plugin command", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    const plan = await new PonytailAdapter().planInstall(
+      { mode: "full", features: {} },
+      {
+        platform: "linux",
+        home,
+        selectedAgents: ["codex"],
+        dryRun: true,
+      },
+    );
+
+    expect(plan.commands).toEqual([
+      expect.objectContaining({
+        command: "codex",
+        args: ["plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+        optional: true,
+      }),
+      expect.objectContaining({
+        command: "codex",
+        args: ["plugin", "add", "ponytail@ponytail"],
+      }),
+      expect.objectContaining({
+        command: "codex",
+        args: [],
+        interactive: true,
+      }),
+    ]);
     await rm(home, { recursive: true, force: true });
   });
 

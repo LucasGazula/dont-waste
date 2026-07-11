@@ -1,14 +1,56 @@
-import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  codexConfigPath,
   readMcpServer,
   registerHeadroomMcp,
   headroomMcpSpec,
 } from "../src/mcp.js";
+import { getAgentPaths } from "../src/agents.js";
+
+const inheritedCodexHome = process.env.CODEX_HOME;
+
+beforeEach(() => {
+  delete process.env.CODEX_HOME;
+});
+
+afterAll(() => {
+  if (inheritedCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = inheritedCodexHome;
+});
 
 describe("mcp registration", () => {
+  it("uses CODEX_HOME for Codex configuration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const codexHome = path.join(home, "managed-codex");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      expect(codexConfigPath({ home })).toBe(
+        path.join(codexHome, "config.toml"),
+      );
+      expect(getAgentPaths("codex", { home, platform: "linux" })).toEqual([
+        path.join(codexHome, "config.toml"),
+        path.join(codexHome, "AGENTS.md"),
+      ]);
+      const result = await registerHeadroomMcp(
+        "codex",
+        headroomMcpSpec("/usr/local/bin/headroom"),
+        { home, platform: "linux" },
+      );
+      expect(result.path).toBe(path.join(codexHome, "config.toml"));
+      await expect(
+        readFile(path.join(home, ".codex", "config.toml"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("writes codex configuration with comments and markers", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
     const spec = headroomMcpSpec("/usr/local/bin/headroom");

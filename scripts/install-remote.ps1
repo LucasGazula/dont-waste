@@ -40,7 +40,8 @@ try {
   $Shim = Join-Path $Prefix "bin\dont-waste.cmd"
   if (-not (Test-Path -LiteralPath $Shim)) { throw "The installer did not create $Shim" }
   Write-Host "`nInstallation complete. Launching Don’t Waste setup…"
-  & $Shim
+  if ($args.Count -eq 0) { & $Shim init }
+  else { & $Shim @args }
 }
 finally {
   if (Test-Path -LiteralPath $TempRoot) { Remove-Item -LiteralPath $TempRoot -Recurse -Force }

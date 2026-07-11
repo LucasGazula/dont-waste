@@ -105,7 +105,7 @@ describe("local bootstrap installer seams", () => {
     expect(unix).toMatch(/codeload\.github\.com/);
     expect(unix).toMatch(/scripts\/install\.sh/);
     expect(unix).toMatch(/\/dev\/tty/);
-    expect(unix).toMatch(/exec \"\$SHIM\"/);
+    expect(unix).toMatch(/exec \"\$SHIM\" init/);
     expect(windows).toMatch(/codeload\.github\.com/);
     expect(windows).toMatch(/scripts\\install\.ps1/);
     expect(windows).toMatch(/dont-waste\.cmd/);
