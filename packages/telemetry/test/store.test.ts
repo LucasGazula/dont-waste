@@ -57,7 +57,7 @@ describe("telemetry projects sessions and cursors", () => {
       error: null,
     });
     store.close();
-  }, 15_000);
+  });
 
   it("keeps benchmark-reference out of measured totals while preserving cost/model fields", () => {
     const events = [
