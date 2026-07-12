@@ -59,7 +59,7 @@ describe("ponytail mode persistence", () => {
     expect(checks.find((c) => c.id === "ponytail-node")).toBeDefined();
   });
 
-  it("does not fail when Codex already has the Ponytail marketplace", async () => {
+  it("stops before plugin install when Codex marketplace registration is rejected", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
     const adapter = new PonytailAdapter();
     const context = {
@@ -78,6 +78,7 @@ describe("ponytail mode persistence", () => {
       optional: true,
     });
 
+    const started: string[] = [];
     const result = await adapter.install(
       {
         ...plan,
@@ -96,13 +97,24 @@ describe("ponytail mode persistence", () => {
           ...plan.commands.slice(2),
         ],
       },
-      context,
+      {
+        ...context,
+        beforeCommand: (command) => {
+          started.push(command.label);
+        },
+      },
     );
 
-    expect(result.succeeded).toBe(true);
-    expect(result.errors).toEqual([]);
-    expect(result.executed).toHaveLength(2);
-    expect(result.skipped).toHaveLength(1);
+    expect(result.succeeded).toBe(false);
+    expect(result.errors).toEqual([
+      "Add Ponytail marketplace to Codex exited with 1",
+    ]);
+    expect(result.executed).toHaveLength(1);
+    expect(result.skipped.map((command) => command.label)).toEqual([
+      "Install Ponytail plugin in Codex",
+      "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
+    ]);
+    expect(started).toEqual(["Add Ponytail marketplace to Codex"]);
     await rm(home, { recursive: true, force: true });
   });
 
@@ -123,6 +135,7 @@ describe("ponytail mode persistence", () => {
         command: "codex",
         args: ["plugin", "marketplace", "add", "DietrichGebert/ponytail"],
         optional: true,
+        stopOnOptionalFailure: true,
       }),
       expect.objectContaining({
         command: "codex",

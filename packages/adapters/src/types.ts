@@ -8,6 +8,8 @@ export type Command = {
   interactive?: boolean | undefined;
   /** Optional commands may fail without aborting the operation; optional interactive commands also do not block activation. */
   optional?: boolean | undefined;
+  /** When an optional prerequisite fails, stop dependent commands and fail the operation. */
+  stopOnOptionalFailure?: boolean | undefined;
   shell?: boolean | undefined;
   /** Extra env for this child only (merged over process.env). */
   env?: Record<string, string> | undefined;

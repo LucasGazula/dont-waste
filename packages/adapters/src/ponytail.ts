@@ -38,6 +38,7 @@ function commandsFor(agent: AgentId): Command[] {
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Codex",
         optional: true,
+        stopOnOptionalFailure: true,
       },
       {
         command: "codex",
@@ -59,6 +60,7 @@ function commandsFor(agent: AgentId): Command[] {
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Claude Code",
         optional: true,
+        stopOnOptionalFailure: true,
       },
       {
         command: "claude",
@@ -73,6 +75,7 @@ function commandsFor(agent: AgentId): Command[] {
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Copilot CLI",
         optional: true,
+        stopOnOptionalFailure: true,
       },
       {
         command: "copilot",
@@ -262,7 +265,7 @@ export class PonytailAdapter extends BaseAdapter {
         )
           ? detected.detected
             ? "Existing Ponytail install detected; marketplace registration is skipped and existing sources are preserved."
-            : "Ponytail marketplace registration is best-effort; existing marketplace sources are preserved."
+            : "Ponytail marketplace registration preserves existing sources; a rejected registration stops dependent plugin installation for review."
           : "",
       ].filter(Boolean),
       affectedPaths,
