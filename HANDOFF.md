@@ -6,7 +6,7 @@ Checkout: /path/to/dont_waste
 
 ## Objetivo
 
-Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Codex, Claude Code, Gemini CLI, Copilot CLI, Antigravity CLI, OpenCode e Pi.
+Orquestrador local-first que integra Headroom, RTK, Caveman e Ponytail para Codex, Claude Code, Copilot CLI, Antigravity CLI, OpenCode e Pi.
 
 Documentação de utilizador: [`README.md`](README.md). Comparação com upstreams (sem paridade total): [`docs/upstream-capability-audit.md`](docs/upstream-capability-audit.md).
 

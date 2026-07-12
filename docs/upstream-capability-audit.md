@@ -188,7 +188,7 @@
 
 | Tema                         | Estado                                                                                 |
 | ---------------------------- | -------------------------------------------------------------------------------------- |
-| Agentes suportados           | Codex, Claude Code, Gemini CLI, Copilot CLI, Antigravity CLI, OpenCode, Pi             |
+| Agentes suportados           | Codex, Claude Code, Copilot CLI, Antigravity CLI, OpenCode, Pi                         |
 | Telemetria                   | SQLite local; measured/estimated/unavailable; dedupe `overlapKey`; sem prompts/outputs |
 | Dashboard                    | SPA + API locais; não substitui `headroom dashboard` upstream                          |
 | Controles avançados Headroom | Só `outputShaper` + `ccrTtl` em MCP marker-owned                                       |

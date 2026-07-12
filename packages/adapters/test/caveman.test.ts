@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -130,39 +138,35 @@ describe("caveman adapter planning", () => {
     expect(checks.find((c) => c.id === "caveman-node")).toBeDefined();
   });
 
-  it("verifies the Codex skill under CODEX_HOME", async () => {
+  it("links the global Caveman skill into CODEX_HOME and verifies it", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
     const codexHome = path.join(home, "codex-home");
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
     try {
+      const globalSkillDir = path.join(home, ".agents", "skills", "caveman");
+      await mkdir(globalSkillDir, { recursive: true });
+      await writeFile(
+        path.join(globalSkillDir, "SKILL.md"),
+        "---\nname: caveman\n---\n",
+        "utf8",
+      );
       const adapter = new CavemanAdapter();
       const context = {
         platform: "linux" as const,
         home,
         selectedAgents: ["codex" as const],
-        dryRun: true,
+        dryRun: false,
       };
-      const missing = await adapter.verify(
-        { mode: "full", features: {} },
-        context,
+      const selection = { mode: "full" as const, features: {} };
+      const plan = await adapter.planInstall(selection, context);
+      const result = await adapter.install({ ...plan, commands: [] }, context);
+      expect(result.succeeded).toBe(true);
+      expect(await readlink(path.join(codexHome, "skills", "caveman"))).toBe(
+        globalSkillDir,
       );
-      expect(
-        missing.find((check) => check.id === "caveman-codex-skill"),
-      ).toMatchObject({ status: "fail" });
 
-      await mkdir(path.join(codexHome, "skills", "caveman"), {
-        recursive: true,
-      });
-      await writeFile(
-        path.join(codexHome, "skills", "caveman", "SKILL.md"),
-        "---\nname: caveman\n---\n",
-        "utf8",
-      );
-      const installed = await adapter.verify(
-        { mode: "full", features: {} },
-        context,
-      );
+      const installed = await adapter.verify(selection, context);
       expect(
         installed.find((check) => check.id === "caveman-codex-skill"),
       ).toMatchObject({ status: "pass" });
@@ -196,6 +200,11 @@ describe("caveman adapter planning", () => {
     // Run install, which calls ensureSkillLinked (pass commands: [] to avoid executing external commands in tests)
     const result = await adapter.install({ ...plan, commands: [] }, context);
     expect(result.succeeded).toBe(true);
+    expect(
+      await readlink(
+        path.join(home, ".gemini", "antigravity-cli", "skills", "caveman"),
+      ),
+    ).toBe(globalSkillDir);
 
     // Verify antigravity skill check passes
     const checks = await adapter.verify(selection, context);
@@ -206,7 +215,7 @@ describe("caveman adapter planning", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("overwrites incorrect or invalid existing skill link/file/directory at the target path", async () => {
+  it("preserves an unowned Antigravity skill directory", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
     const globalSkillDir = path.join(home, ".agents", "skills", "caveman");
     await mkdir(globalSkillDir, { recursive: true });
@@ -226,7 +235,6 @@ describe("caveman adapter planning", () => {
     const selection = { mode: "full" as const, features: {} };
     const plan = await adapter.planInstall(selection, context);
 
-    // Pre-create an incorrect/invalid directory at the target skill directory path:
     const targetDir = path.join(
       home,
       ".gemini",
@@ -236,21 +244,73 @@ describe("caveman adapter planning", () => {
     );
     await mkdir(targetDir, { recursive: true });
     await writeFile(
-      path.join(targetDir, "NOT_SKILL.md"),
-      "invalid file",
+      path.join(targetDir, "SKILL.md"),
+      "user-managed skill",
       "utf8",
     );
 
-    // Run install, which should detect the invalid link/directory, delete it, and link correctly
     const result = await adapter.install({ ...plan, commands: [] }, context);
-    expect(result.succeeded).toBe(true);
+    expect(result.succeeded).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "existing skill target is not a Don’t Waste link",
+        ),
+      ]),
+    );
+    expect(await readFile(path.join(targetDir, "SKILL.md"), "utf8")).toBe(
+      "user-managed skill",
+    );
 
-    // Verify antigravity skill check passes
     const checks = await adapter.verify(selection, context);
     expect(
       checks.find((check) => check.id === "caveman-antigravity-skill"),
-    ).toMatchObject({ status: "pass" });
+    ).toMatchObject({ status: "fail" });
 
     await rm(home, { recursive: true, force: true });
+  });
+
+  it("rejects a wrong Codex skill symlink even when it contains SKILL.md", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
+    const codexHome = path.join(home, "codex-home");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const globalSkillDir = path.join(home, ".agents", "skills", "caveman");
+      const wrongSkillDir = path.join(home, "wrong-caveman");
+      await mkdir(globalSkillDir, { recursive: true });
+      await mkdir(wrongSkillDir, { recursive: true });
+      await writeFile(
+        path.join(globalSkillDir, "SKILL.md"),
+        "canonical",
+        "utf8",
+      );
+      await writeFile(path.join(wrongSkillDir, "SKILL.md"), "stale", "utf8");
+      const targetDir = path.join(codexHome, "skills", "caveman");
+      await mkdir(path.dirname(targetDir), { recursive: true });
+      await symlink(wrongSkillDir, targetDir, "dir");
+
+      const adapter = new CavemanAdapter();
+      const context = {
+        platform: "linux" as const,
+        home,
+        selectedAgents: ["codex" as const],
+        dryRun: false,
+      };
+      const selection = { mode: "full" as const, features: {} };
+      const plan = await adapter.planInstall(selection, context);
+      const result = await adapter.install({ ...plan, commands: [] }, context);
+
+      expect(result.succeeded).toBe(false);
+      expect(await readlink(targetDir)).toBe(wrongSkillDir);
+      const checks = await adapter.verify(selection, context);
+      expect(
+        checks.find((check) => check.id === "caveman-codex-skill"),
+      ).toMatchObject({ status: "fail" });
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

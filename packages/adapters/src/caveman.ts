@@ -1,7 +1,9 @@
 import {
   access,
+  lstat,
   mkdir,
   readFile,
+  readlink,
   rm,
   symlink,
   writeFile,
@@ -69,6 +71,88 @@ export function cavemanAntigravitySkillPath(
   );
 }
 
+function cavemanGlobalSkillDir(context: Pick<AdapterContext, "home">): string {
+  return path.join(context.home, ".agents", "skills", "caveman");
+}
+
+function cavemanSkillTargetDir(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): string | undefined {
+  const skillPath =
+    agent === "codex"
+      ? cavemanCodexSkillPath(context)
+      : agent === "antigravity-cli"
+        ? cavemanAntigravitySkillPath(context)
+        : undefined;
+  return skillPath ? path.dirname(skillPath) : undefined;
+}
+
+type CavemanSkillLinkState = "missing" | "canonical" | "conflict";
+
+function isCavemanSkillAgent(
+  agent: AgentId,
+): agent is "codex" | "antigravity-cli" {
+  return agent === "codex" || agent === "antigravity-cli";
+}
+
+async function cavemanSkillLinkState(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): Promise<CavemanSkillLinkState> {
+  const targetDir = cavemanSkillTargetDir(agent, context);
+  if (!targetDir) return "missing";
+  try {
+    const target = await lstat(targetDir);
+    if (!target.isSymbolicLink()) return "conflict";
+    const link = await readlink(targetDir);
+    const resolvedLink = path.resolve(path.dirname(targetDir), link);
+    return resolvedLink === path.resolve(cavemanGlobalSkillDir(context))
+      ? "canonical"
+      : "conflict";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    return "conflict";
+  }
+}
+
+async function hasCanonicalCavemanSkillLink(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): Promise<boolean> {
+  if ((await cavemanSkillLinkState(agent, context)) !== "canonical")
+    return false;
+  try {
+    await access(path.join(cavemanGlobalSkillDir(context), "SKILL.md"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function cavemanSkillConflictMessage(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): string {
+  return `${agent} existing skill target is not a Don’t Waste link: ${cavemanSkillTargetDir(agent, context)}`;
+}
+
+async function cavemanSkillConflicts(
+  context: Pick<AdapterContext, "home" | "selectedAgents">,
+): Promise<string[]> {
+  return (
+    await Promise.all(
+      context.selectedAgents
+        .filter(isCavemanSkillAgent)
+        .map(async (agent) =>
+          (await cavemanSkillLinkState(agent, context)) === "conflict"
+            ? cavemanSkillConflictMessage(agent, context)
+            : undefined,
+        ),
+    )
+  ).filter((message): message is string => Boolean(message));
+}
+
 async function updateJson(
   file: string,
   transform: (value: Record<string, unknown>) => Record<string, unknown>,
@@ -128,13 +212,9 @@ async function cavemanAgentInstalled(
   agent: AgentId,
   context: Pick<AdapterContext, "home">,
 ): Promise<boolean> {
-  const skillPath =
-    agent === "codex"
-      ? cavemanCodexSkillPath(context)
-      : agent === "antigravity-cli"
-        ? cavemanAntigravitySkillPath(context)
-        : undefined;
-  const marker = skillPath ?? cavemanMarkerPath(agent, context);
+  if (agent === "codex" || agent === "antigravity-cli")
+    return hasCanonicalCavemanSkillLink(agent, context);
+  const marker = cavemanMarkerPath(agent, context);
   if (!marker) return false;
   try {
     await access(marker);
@@ -217,10 +297,10 @@ export class CavemanAdapter extends BaseAdapter {
     const affectedPaths = cavemanActivePaths(context);
     if (context.selectedAgents.length) {
       affectedPaths.push(cavemanConfigPath(context));
-      if (context.selectedAgents.includes("codex"))
-        affectedPaths.push(cavemanCodexSkillPath(context));
-      if (context.selectedAgents.includes("antigravity-cli"))
-        affectedPaths.push(cavemanAntigravitySkillPath(context));
+      for (const agent of context.selectedAgents) {
+        const targetDir = cavemanSkillTargetDir(agent, context);
+        if (targetDir) affectedPaths.push(targetDir);
+      }
     }
     const installTargets = (
       await Promise.all(
@@ -246,6 +326,7 @@ export class CavemanAdapter extends BaseAdapter {
     const supportedSelected = context.selectedAgents.filter(
       (agent) => cavemanOnlyId[agent],
     );
+    const skillConflicts = await cavemanSkillConflicts(context);
     return this.basePlan(
       selection,
       context,
@@ -271,6 +352,10 @@ export class CavemanAdapter extends BaseAdapter {
         ...unsupported.map(
           (agent) => `${agent} has no Caveman --only target yet; skipped.`,
         ),
+        ...skillConflicts.map(
+          (message) =>
+            `${message}. Don’t Waste will preserve it and stop before installation.`,
+        ),
       ].filter(Boolean),
       affectedPaths,
     );
@@ -280,16 +365,34 @@ export class CavemanAdapter extends BaseAdapter {
     plan: OperationPlan,
     context: AdapterContext,
   ): Promise<InstallResult> {
+    if (!context.dryRun) {
+      const conflicts = await cavemanSkillConflicts(context);
+      if (conflicts.length)
+        return {
+          succeeded: false,
+          executed: [],
+          skipped: [],
+          errors: conflicts,
+        };
+    }
+
     const base = await super.install(plan, context);
     if (!base.succeeded || context.dryRun) return base;
     if (!context.selectedAgents.length) return base;
 
-    // Ensure global skill is linked to host-specific path
+    const linkErrors: string[] = [];
     for (const agent of context.selectedAgents) {
       if (agent === "codex" || agent === "antigravity-cli") {
-        await ensureSkillLinked(agent, context);
+        const error = await ensureSkillLinked(agent, context);
+        if (error) linkErrors.push(error);
       }
     }
+    if (linkErrors.length)
+      return {
+        ...base,
+        succeeded: false,
+        errors: [...base.errors, ...linkErrors],
+      };
 
     const markers = cavemanActivePaths(context);
     const mode = resolveCavemanMode(plan.selection.mode);
@@ -338,42 +441,10 @@ export class CavemanAdapter extends BaseAdapter {
     const expected = resolveCavemanMode(selection.mode);
     const modeFiles = cavemanActivePaths(context);
     if (context.selectedAgents.includes("codex")) {
-      const file = cavemanCodexSkillPath(context);
-      try {
-        await access(file);
-        checks.push({
-          id: "caveman-codex-skill",
-          status: "pass",
-          message: `Codex Caveman skill found at ${file}`,
-        });
-      } catch {
-        checks.push({
-          id: "caveman-codex-skill",
-          status: "fail",
-          message: `Codex Caveman skill is missing at ${file}`,
-          remediation:
-            "Rerun dont-waste init for Codex and start a new session.",
-        });
-      }
+      checks.push(await cavemanSkillHealthCheck("codex", context));
     }
     if (context.selectedAgents.includes("antigravity-cli")) {
-      const file = cavemanAntigravitySkillPath(context);
-      try {
-        await access(file);
-        checks.push({
-          id: "caveman-antigravity-skill",
-          status: "pass",
-          message: `Antigravity Caveman skill found at ${file}`,
-        });
-      } catch {
-        checks.push({
-          id: "caveman-antigravity-skill",
-          status: "fail",
-          message: `Antigravity Caveman skill is missing at ${file}`,
-          remediation:
-            "Rerun dont-waste init for Antigravity CLI and start a new session.",
-        });
-      }
+      checks.push(await cavemanSkillHealthCheck("antigravity-cli", context));
     }
     if (
       !modeFiles.length &&
@@ -571,54 +642,50 @@ export class CavemanAdapter extends BaseAdapter {
 async function ensureSkillLinked(
   agent: AgentId,
   context: Pick<AdapterContext, "home">,
-): Promise<void> {
-  const globalSkillDir = path.join(
-    context.home,
-    ".agents",
-    "skills",
-    "caveman",
-  );
-  const targetSkillPath =
-    agent === "codex"
-      ? cavemanCodexSkillPath(context)
-      : agent === "antigravity-cli"
-        ? cavemanAntigravitySkillPath(context)
-        : undefined;
-
-  if (!targetSkillPath) return;
+): Promise<string | undefined> {
+  const globalSkillDir = cavemanGlobalSkillDir(context);
+  const targetDir = cavemanSkillTargetDir(agent, context);
+  if (!targetDir) return undefined;
 
   try {
     await access(path.join(globalSkillDir, "SKILL.md"));
   } catch {
-    return; // global skill not installed
+    return `Global Caveman skill is missing at ${globalSkillDir}`;
   }
 
-  const targetDir = path.dirname(targetSkillPath);
-  let isLinkedCorrectly = false;
+  const state = await cavemanSkillLinkState(agent, context);
+  if (state === "canonical") return undefined;
+  if (state === "conflict") return cavemanSkillConflictMessage(agent, context);
+
   try {
-    await access(targetSkillPath);
-    const content = await readFile(targetSkillPath, "utf8");
-    if (content.includes("Caveman") || content.trim().length > 0) {
-      isLinkedCorrectly = true;
-    }
-  } catch {
-    isLinkedCorrectly = false;
+    await mkdir(path.dirname(targetDir), { recursive: true });
+    await symlink(globalSkillDir, targetDir, "dir");
+    return undefined;
+  } catch (error) {
+    return `Failed to link Caveman skill for ${agent}: ${error instanceof Error ? error.message : String(error)}`;
   }
+}
 
-  if (!isLinkedCorrectly) {
-    const parentDir = path.dirname(targetDir);
-    await mkdir(parentDir, { recursive: true });
-    try {
-      await rm(targetDir, { recursive: true, force: true });
-    } catch {
-      // Ignore removal errors
-    }
-    try {
-      await symlink(globalSkillDir, targetDir, "dir");
-    } catch (err) {
-      console.warn(
-        `Failed to symlink Caveman skill for ${agent}: ${String(err)}`,
-      );
-    }
-  }
+async function cavemanSkillHealthCheck(
+  agent: "codex" | "antigravity-cli",
+  context: Pick<AdapterContext, "home">,
+): Promise<HealthCheck> {
+  const file =
+    agent === "codex"
+      ? cavemanCodexSkillPath(context)
+      : cavemanAntigravitySkillPath(context);
+  const label = agent === "codex" ? "Codex" : "Antigravity";
+  return (await hasCanonicalCavemanSkillLink(agent, context))
+    ? {
+        id: `caveman-${agent === "codex" ? "codex" : "antigravity"}-skill`,
+        status: "pass",
+        message: `${label} Caveman skill is linked to the canonical global skill at ${file}`,
+      }
+    : {
+        id: `caveman-${agent === "codex" ? "codex" : "antigravity"}-skill`,
+        status: "fail",
+        message: `${label} Caveman skill is not linked to the canonical global skill at ${file}`,
+        remediation:
+          "Preserve the existing skill target, resolve the conflict, then rerun dont-waste init and start a new session.",
+      };
 }
