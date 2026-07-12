@@ -105,7 +105,9 @@ export async function runCommand(
       execa(command.command, command.args, {
         reject: false,
         shell: command.shell ?? false,
-        stdio: "inherit",
+        stdio: command.interactive
+          ? "inherit"
+          : ["ignore", "inherit", "inherit"],
         ...(command.env
           ? { env: { ...process.env, ...command.env } as NodeJS.ProcessEnv }
           : {}),

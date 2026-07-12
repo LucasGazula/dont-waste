@@ -1,4 +1,11 @@
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type { AgentId, Mode } from "@dont-waste/catalog";
 import { importCavemanStats } from "@dont-waste/telemetry";
@@ -18,7 +25,6 @@ import type {
 export const cavemanOnlyId: Partial<Record<AgentId, string>> = {
   codex: "codex",
   "claude-code": "claude",
-  "gemini-cli": "gemini",
   "copilot-cli": "copilot",
   "antigravity-cli": "antigravity",
   opencode: "opencode",
@@ -48,6 +54,19 @@ export function cavemanCodexSkillPath(
 ): string {
   const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
   return path.join(codexHome, "skills", "caveman", "SKILL.md");
+}
+
+export function cavemanAntigravitySkillPath(
+  context: Pick<AdapterContext, "home">,
+): string {
+  return path.join(
+    context.home,
+    ".gemini",
+    "antigravity-cli",
+    "skills",
+    "caveman",
+    "SKILL.md",
+  );
 }
 
 async function updateJson(
@@ -110,7 +129,11 @@ async function cavemanAgentInstalled(
   context: Pick<AdapterContext, "home">,
 ): Promise<boolean> {
   const skillPath =
-    agent === "codex" ? cavemanCodexSkillPath(context) : undefined;
+    agent === "codex"
+      ? cavemanCodexSkillPath(context)
+      : agent === "antigravity-cli"
+        ? cavemanAntigravitySkillPath(context)
+        : undefined;
   const marker = skillPath ?? cavemanMarkerPath(agent, context);
   if (!marker) return false;
   try {
@@ -196,6 +219,8 @@ export class CavemanAdapter extends BaseAdapter {
       affectedPaths.push(cavemanConfigPath(context));
       if (context.selectedAgents.includes("codex"))
         affectedPaths.push(cavemanCodexSkillPath(context));
+      if (context.selectedAgents.includes("antigravity-cli"))
+        affectedPaths.push(cavemanAntigravitySkillPath(context));
     }
     const installTargets = (
       await Promise.all(
@@ -212,6 +237,7 @@ export class CavemanAdapter extends BaseAdapter {
             command: "npx",
             args: installArgs({ ...context, selectedAgents: installTargets }),
             label: "Run the official Caveman installer for selected agents",
+            env: { CI: "true" },
             timeoutMs: 180_000,
             forceKillAfterDelay: 5_000,
           },
@@ -257,6 +283,13 @@ export class CavemanAdapter extends BaseAdapter {
     const base = await super.install(plan, context);
     if (!base.succeeded || context.dryRun) return base;
     if (!context.selectedAgents.length) return base;
+
+    // Ensure global skill is linked to host-specific path
+    for (const agent of context.selectedAgents) {
+      if (agent === "codex" || agent === "antigravity-cli") {
+        await ensureSkillLinked(agent, context);
+      }
+    }
 
     const markers = cavemanActivePaths(context);
     const mode = resolveCavemanMode(plan.selection.mode);
@@ -323,7 +356,30 @@ export class CavemanAdapter extends BaseAdapter {
         });
       }
     }
-    if (!modeFiles.length && !context.selectedAgents.includes("codex")) {
+    if (context.selectedAgents.includes("antigravity-cli")) {
+      const file = cavemanAntigravitySkillPath(context);
+      try {
+        await access(file);
+        checks.push({
+          id: "caveman-antigravity-skill",
+          status: "pass",
+          message: `Antigravity Caveman skill found at ${file}`,
+        });
+      } catch {
+        checks.push({
+          id: "caveman-antigravity-skill",
+          status: "fail",
+          message: `Antigravity Caveman skill is missing at ${file}`,
+          remediation:
+            "Rerun dont-waste init for Antigravity CLI and start a new session.",
+        });
+      }
+    }
+    if (
+      !modeFiles.length &&
+      !context.selectedAgents.includes("codex") &&
+      !context.selectedAgents.includes("antigravity-cli")
+    ) {
       checks.push({
         id: "caveman-mode",
         status: "warn",
@@ -509,5 +565,60 @@ export class CavemanAdapter extends BaseAdapter {
         : [],
       errors,
     };
+  }
+}
+
+async function ensureSkillLinked(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): Promise<void> {
+  const globalSkillDir = path.join(
+    context.home,
+    ".agents",
+    "skills",
+    "caveman",
+  );
+  const targetSkillPath =
+    agent === "codex"
+      ? cavemanCodexSkillPath(context)
+      : agent === "antigravity-cli"
+        ? cavemanAntigravitySkillPath(context)
+        : undefined;
+
+  if (!targetSkillPath) return;
+
+  try {
+    await access(path.join(globalSkillDir, "SKILL.md"));
+  } catch {
+    return; // global skill not installed
+  }
+
+  const targetDir = path.dirname(targetSkillPath);
+  let isLinkedCorrectly = false;
+  try {
+    await access(targetSkillPath);
+    const content = await readFile(targetSkillPath, "utf8");
+    if (content.includes("Caveman") || content.trim().length > 0) {
+      isLinkedCorrectly = true;
+    }
+  } catch {
+    isLinkedCorrectly = false;
+  }
+
+  if (!isLinkedCorrectly) {
+    const parentDir = path.dirname(targetDir);
+    await mkdir(parentDir, { recursive: true });
+    try {
+      await rm(targetDir, { recursive: true, force: true });
+    } catch {
+      // Ignore removal errors
+    }
+    try {
+      await symlink(globalSkillDir, targetDir, "dir");
+    } catch (err) {
+      console.warn(
+        `Failed to symlink Caveman skill for ${agent}: ${String(err)}`,
+      );
+    }
   }
 }

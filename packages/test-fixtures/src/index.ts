@@ -4,10 +4,6 @@ export const agentConfigFixtures = {
     hooks: {},
     permissions: { allow: ["Read"] },
   }),
-  "gemini-cli": JSON.stringify({
-    theme: "dark",
-    mcpServers: { existing: { command: "example" } },
-  }),
   "copilot-cli": JSON.stringify({ trustedFolders: ["~/work"] }),
   "antigravity-cli": JSON.stringify({ extensions: [] }),
   opencode: JSON.stringify({ plugin: ["existing-plugin"] }),

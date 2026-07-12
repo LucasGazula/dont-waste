@@ -172,4 +172,85 @@ describe("caveman adapter planning", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  it("symlinks global Caveman skill to antigravity-cli path and verifies it", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
+    const globalSkillDir = path.join(home, ".agents", "skills", "caveman");
+    await mkdir(globalSkillDir, { recursive: true });
+    await writeFile(
+      path.join(globalSkillDir, "SKILL.md"),
+      "---\nname: caveman\n---\n",
+      "utf8",
+    );
+
+    const adapter = new CavemanAdapter();
+    const context = {
+      platform: "linux" as const,
+      home,
+      selectedAgents: ["antigravity-cli" as const],
+      dryRun: false,
+    };
+    const selection = { mode: "full" as const, features: {} };
+    const plan = await adapter.planInstall(selection, context);
+
+    // Run install, which calls ensureSkillLinked (pass commands: [] to avoid executing external commands in tests)
+    const result = await adapter.install({ ...plan, commands: [] }, context);
+    expect(result.succeeded).toBe(true);
+
+    // Verify antigravity skill check passes
+    const checks = await adapter.verify(selection, context);
+    expect(
+      checks.find((check) => check.id === "caveman-antigravity-skill"),
+    ).toMatchObject({ status: "pass" });
+
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("overwrites incorrect or invalid existing skill link/file/directory at the target path", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
+    const globalSkillDir = path.join(home, ".agents", "skills", "caveman");
+    await mkdir(globalSkillDir, { recursive: true });
+    await writeFile(
+      path.join(globalSkillDir, "SKILL.md"),
+      "---\nname: caveman\n---\n",
+      "utf8",
+    );
+
+    const adapter = new CavemanAdapter();
+    const context = {
+      platform: "linux" as const,
+      home,
+      selectedAgents: ["antigravity-cli" as const],
+      dryRun: false,
+    };
+    const selection = { mode: "full" as const, features: {} };
+    const plan = await adapter.planInstall(selection, context);
+
+    // Pre-create an incorrect/invalid directory at the target skill directory path:
+    const targetDir = path.join(
+      home,
+      ".gemini",
+      "antigravity-cli",
+      "skills",
+      "caveman",
+    );
+    await mkdir(targetDir, { recursive: true });
+    await writeFile(
+      path.join(targetDir, "NOT_SKILL.md"),
+      "invalid file",
+      "utf8",
+    );
+
+    // Run install, which should detect the invalid link/directory, delete it, and link correctly
+    const result = await adapter.install({ ...plan, commands: [] }, context);
+    expect(result.succeeded).toBe(true);
+
+    // Verify antigravity skill check passes
+    const checks = await adapter.verify(selection, context);
+    expect(
+      checks.find((check) => check.id === "caveman-antigravity-skill"),
+    ).toMatchObject({ status: "pass" });
+
+    await rm(home, { recursive: true, force: true });
+  });
 });

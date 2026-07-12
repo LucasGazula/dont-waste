@@ -27,7 +27,6 @@ describe("RTK init commands avoid telemetry hang", () => {
         selectedAgents: [
           "codex",
           "claude-code",
-          "gemini-cli",
           "copilot-cli",
           "antigravity-cli",
           "opencode",
@@ -38,7 +37,7 @@ describe("RTK init commands avoid telemetry hang", () => {
     const inits = plan.commands.filter((command) =>
       command.args.includes("init"),
     );
-    expect(inits).toHaveLength(7);
+    expect(inits).toHaveLength(6);
     for (const command of inits) {
       expect(command.env?.RTK_TELEMETRY_DISABLED).toBe("1");
       expect(command.timeoutMs).toBeGreaterThan(0);

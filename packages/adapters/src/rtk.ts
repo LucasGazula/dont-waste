@@ -28,7 +28,6 @@ import type {
 export function rtkInitArgs(agent: AgentId): string[] {
   if (agent === "codex") return ["init", "-g", "--codex"];
   if (agent === "claude-code") return ["init", "-g"];
-  if (agent === "gemini-cli") return ["init", "-g", "--gemini"];
   if (agent === "copilot-cli") return ["init", "-g", "--copilot"];
   if (agent === "antigravity-cli") return ["init", "--agent", "antigravity"];
   if (agent === "opencode") return ["init", "-g", "--opencode"];

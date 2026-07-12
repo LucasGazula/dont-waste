@@ -80,18 +80,7 @@ function commandsFor(agent: AgentId): Command[] {
         label: "Install Ponytail in Copilot CLI",
       },
     ];
-  if (agent === "gemini-cli")
-    return [
-      {
-        command: "gemini",
-        args: [
-          "extensions",
-          "install",
-          "https://github.com/DietrichGebert/ponytail",
-        ],
-        label: "Install Ponytail Gemini extension",
-      },
-    ];
+
   if (agent === "antigravity-cli")
     return [
       {
@@ -148,14 +137,7 @@ function uninstallCommandsFor(agent: AgentId): Command[] {
         label: "Remove Ponytail from Pi",
       },
     ];
-  if (agent === "gemini-cli")
-    return [
-      {
-        command: "gemini",
-        args: ["extensions", "uninstall", "ponytail"],
-        label: "Remove Ponytail Gemini extension",
-      },
-    ];
+
   if (agent === "copilot-cli")
     return [
       {

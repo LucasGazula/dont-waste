@@ -4,7 +4,6 @@ export const toolIds = ["headroom", "rtk", "caveman", "ponytail"] as const;
 export const agentIds = [
   "codex",
   "claude-code",
-  "gemini-cli",
   "copilot-cli",
   "antigravity-cli",
   "opencode",
@@ -72,16 +71,7 @@ export const agents: readonly AgentDefinition[] = [
       win32: [`${home}/.claude/settings.json`],
     },
   },
-  {
-    id: "gemini-cli",
-    label: "Gemini CLI",
-    executable: "gemini",
-    configPaths: {
-      linux: [`${home}/.gemini/settings.json`],
-      darwin: [`${home}/.gemini/settings.json`],
-      win32: [`${home}/.gemini/settings.json`],
-    },
-  },
+
   {
     id: "copilot-cli",
     label: "GitHub Copilot CLI",
@@ -97,9 +87,9 @@ export const agents: readonly AgentDefinition[] = [
     label: "Antigravity CLI",
     executable: "agy",
     configPaths: {
-      linux: [`${home}/.antigravity/settings.json`],
-      darwin: [`${home}/.antigravity/settings.json`],
-      win32: [`${home}/.antigravity/settings.json`],
+      linux: [`${home}/.gemini/antigravity-cli/settings.json`],
+      darwin: [`${home}/.gemini/antigravity-cli/settings.json`],
+      win32: [`${home}/.gemini/antigravity-cli/settings.json`],
     },
   },
   {
@@ -165,22 +155,14 @@ export const capabilities: readonly Capability[] = agentIds.flatMap((agent) => {
     {
       tool: "caveman",
       agent,
-      installMethod:
-        agent === "gemini-cli" || agent === "antigravity-cli"
-          ? "extension"
-          : "plugin",
+      installMethod: agent === "antigravity-cli" ? "extension" : "plugin",
       prerequisites: ["Node.js 18+"],
       supportsMetrics: "estimated",
     },
     {
       tool: "ponytail",
       agent,
-      installMethod:
-        agent === "gemini-cli" || agent === "antigravity-cli"
-          ? "extension"
-          : agent === "opencode"
-            ? "plugin"
-            : "plugin",
+      installMethod: agent === "antigravity-cli" ? "extension" : "plugin",
       prerequisites: ["agent CLI"],
       supportsMetrics: "unavailable",
     },

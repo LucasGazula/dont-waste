@@ -41,13 +41,11 @@ function pathTouchesAgent(file: string, agent: AgentId): boolean {
   const token =
     agent === "claude-code"
       ? "claude"
-      : agent === "gemini-cli"
-        ? "gemini"
-        : agent === "copilot-cli"
-          ? "copilot"
-          : agent === "antigravity-cli"
-            ? "antigravity"
-            : agent;
+      : agent === "copilot-cli"
+        ? "copilot"
+        : agent === "antigravity-cli"
+          ? "antigravity"
+          : agent;
   return lower.includes(agent) || lower.includes(token);
 }
 

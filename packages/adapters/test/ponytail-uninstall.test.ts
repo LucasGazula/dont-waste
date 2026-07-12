@@ -13,7 +13,6 @@ describe("ponytail uninstall", () => {
       selectedAgents: [
         "claude-code",
         "codex",
-        "gemini-cli",
         "copilot-cli",
         "antigravity-cli",
       ],
@@ -27,7 +26,6 @@ describe("ponytail uninstall", () => {
       expect.arrayContaining([
         "claude plugin remove ponytail",
         "codex plugin remove ponytail",
-        "gemini extensions uninstall ponytail",
         "copilot plugin remove ponytail",
         "agy plugin uninstall ponytail",
       ]),

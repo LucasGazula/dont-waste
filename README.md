@@ -1,6 +1,6 @@
 # Don’t Waste
 
-Orquestrador **local-first** que integra as ferramentas upstream de redução de tokens [Headroom](https://github.com/headroomlabs-ai/headroom), [RTK](https://github.com/rtk-ai/rtk), [Caveman](https://github.com/JuliusBrussee/caveman) e [Ponytail](https://github.com/DietrichGebert/ponytail) nos agentes Codex, Claude Code, Gemini CLI, GitHub Copilot CLI, Antigravity CLI, OpenCode e Pi.
+Orquestrador **local-first** que integra as ferramentas upstream de redução de tokens [Headroom](https://github.com/headroomlabs-ai/headroom), [RTK](https://github.com/rtk-ai/rtk), [Caveman](https://github.com/JuliusBrussee/caveman) e [Ponytail](https://github.com/DietrichGebert/ponytail) nos agentes Codex, Claude Code, GitHub Copilot CLI, Antigravity CLI, OpenCode e Pi.
 
 Don’t Waste **não** é uma reimplementação desses projetos e **não possui paridade total** com as suas superfícies (dezenas de hosts, proxies, skills de sessão, bibliotecas, etc.). A comparação verificada está em [`docs/upstream-capability-audit.md`](docs/upstream-capability-audit.md).
 
@@ -314,7 +314,6 @@ Se RTK e Headroom transformaram o mesmo fluxo, o total measured mantém só a ob
 | ----------------- | ------------------ | ---------- |
 | `codex`           | Codex              | `codex`    |
 | `claude-code`     | Claude Code        | `claude`   |
-| `gemini-cli`      | Gemini CLI         | `gemini`   |
 | `copilot-cli`     | GitHub Copilot CLI | `copilot`  |
 | `antigravity-cli` | Antigravity CLI    | `agy`      |
 | `opencode`        | OpenCode           | `opencode` |
