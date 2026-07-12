@@ -46,6 +46,39 @@ describe("caveman adapter planning", () => {
     await rm(home, { recursive: true, force: true });
   });
 
+  it("snapshots Caveman host containers and the global skill store", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
+    const codexHome = path.join(home, "codex-home");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const plan = await new CavemanAdapter().planInstall(
+        { mode: "full", features: {} },
+        {
+          platform: "linux",
+          home,
+          selectedAgents: ["codex", "antigravity-cli"],
+          dryRun: true,
+        },
+      );
+
+      expect(plan.affectedPaths).toEqual(
+        expect.arrayContaining([
+          path.join(codexHome, "skills"),
+          path.join(codexHome, "skills", "caveman"),
+          path.join(home, ".gemini", "antigravity-cli", "skills"),
+          path.join(home, ".gemini", "antigravity-cli", "skills", "caveman"),
+          path.join(home, ".agents", "skills"),
+          path.join(home, ".agents", "skills", "caveman"),
+        ]),
+      );
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("maps agents to official --only ids and persists selected mode", async () => {
     expect(cavemanOnlyId["claude-code"]).toBe("claude");
     expect(cavemanOnlyId.opencode).toBe("opencode");
@@ -249,8 +282,27 @@ describe("caveman adapter planning", () => {
       "utf8",
     );
 
-    const result = await adapter.install({ ...plan, commands: [] }, context);
+    let commandsStarted = 0;
+    const result = await adapter.install(
+      {
+        ...plan,
+        commands: [
+          {
+            command: process.execPath,
+            args: ["-e", ""],
+            label: "Sentinel command",
+          },
+        ],
+      },
+      {
+        ...context,
+        beforeCommand: () => {
+          commandsStarted += 1;
+        },
+      },
+    );
     expect(result.succeeded).toBe(false);
+    expect(commandsStarted).toBe(0);
     expect(result.errors).toEqual(
       expect.arrayContaining([
         expect.stringContaining(

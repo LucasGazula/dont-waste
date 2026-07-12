@@ -297,9 +297,15 @@ export class CavemanAdapter extends BaseAdapter {
     const affectedPaths = cavemanActivePaths(context);
     if (context.selectedAgents.length) {
       affectedPaths.push(cavemanConfigPath(context));
-      for (const agent of context.selectedAgents) {
-        const targetDir = cavemanSkillTargetDir(agent, context);
-        if (targetDir) affectedPaths.push(targetDir);
+      const skillTargetDirs = context.selectedAgents
+        .map((agent) => cavemanSkillTargetDir(agent, context))
+        .filter((targetDir): targetDir is string => Boolean(targetDir));
+      if (skillTargetDirs.length) {
+        const globalSkillDir = cavemanGlobalSkillDir(context);
+        affectedPaths.push(path.dirname(globalSkillDir), globalSkillDir);
+        for (const targetDir of skillTargetDirs) {
+          affectedPaths.push(path.dirname(targetDir), targetDir);
+        }
       }
     }
     const installTargets = (
@@ -357,7 +363,7 @@ export class CavemanAdapter extends BaseAdapter {
             `${message}. Don’t Waste will preserve it and stop before installation.`,
         ),
       ].filter(Boolean),
-      affectedPaths,
+      [...new Set(affectedPaths)],
     );
   }
 
