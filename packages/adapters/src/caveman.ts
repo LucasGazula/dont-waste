@@ -8,6 +8,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { AgentId, Mode } from "@dont-waste/catalog";
 import { importCavemanStats } from "@dont-waste/telemetry";
@@ -71,7 +72,29 @@ export function cavemanAntigravitySkillPath(
   );
 }
 
+function findAgentsDir(startDir: string): string | undefined {
+  let current = startDir;
+  while (true) {
+    const candidate = path.join(current, ".agents");
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return undefined;
+}
+
 function cavemanGlobalSkillDir(context: Pick<AdapterContext, "home">): string {
+  if (!process.env.VITEST) {
+    const localAgents = findAgentsDir(process.cwd());
+    if (localAgents) {
+      return path.join(localAgents, "skills", "caveman");
+    }
+  }
   return path.join(context.home, ".agents", "skills", "caveman");
 }
 
