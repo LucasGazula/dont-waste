@@ -1,8 +1,20 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type { DataPaths } from "./paths.js";
 
-export type FileSnapshot = { path: string; contents: string | null };
+export type FileSnapshot =
+  | { path: string; contents: string | null; kind?: "file" }
+  | { path: string; kind: "symlink"; target: string }
+  | { path: string; kind: "directory"; children: FileSnapshot[] };
 export type OperationStatus =
   "planned" | "running" | "succeeded" | "failed" | "rolled-back";
 export type Operation = {
@@ -31,6 +43,68 @@ async function writeState(paths: DataPaths, state: State): Promise<void> {
   await writeFile(paths.state, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+function isBinaryPath(file: string): boolean {
+  return file.endsWith("rtk") || file.endsWith("rtk.exe");
+}
+
+async function snapshotPath(file: string): Promise<FileSnapshot> {
+  try {
+    const metadata = await lstat(file);
+    if (metadata.isSymbolicLink()) {
+      return { path: file, kind: "symlink", target: await readlink(file) };
+    }
+    if (metadata.isDirectory()) {
+      const children = await Promise.all(
+        (await readdir(file)).map((entry) =>
+          snapshotPath(path.join(file, entry)),
+        ),
+      );
+      return { path: file, kind: "directory", children };
+    }
+    const raw = await readFile(file);
+    return {
+      path: file,
+      kind: "file",
+      contents: isBinaryPath(file)
+        ? raw.toString("base64")
+        : raw.toString("utf8"),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { path: file, contents: null };
+    throw error;
+  }
+}
+
+async function removeSnapshotTarget(target: string): Promise<void> {
+  await rm(target, { recursive: true, force: true });
+}
+
+async function restoreSnapshot(snapshot: FileSnapshot): Promise<void> {
+  if (snapshot.kind === "symlink") {
+    await removeSnapshotTarget(snapshot.path);
+    await mkdir(path.dirname(snapshot.path), { recursive: true });
+    await symlink(snapshot.target, snapshot.path);
+    return;
+  }
+  if (snapshot.kind === "directory") {
+    await removeSnapshotTarget(snapshot.path);
+    await mkdir(snapshot.path, { recursive: true });
+    for (const child of snapshot.children) await restoreSnapshot(child);
+    return;
+  }
+  if (snapshot.contents === null) {
+    await removeSnapshotTarget(snapshot.path);
+    return;
+  }
+  await removeSnapshotTarget(snapshot.path);
+  await mkdir(path.dirname(snapshot.path), { recursive: true });
+  const buffer = isBinaryPath(snapshot.path)
+    ? Buffer.from(snapshot.contents, "base64")
+    : Buffer.from(snapshot.contents, "utf8");
+  await writeFile(snapshot.path, buffer);
+}
+
 export async function createOperation(
   paths: DataPaths,
   type: Operation["type"],
@@ -38,22 +112,7 @@ export async function createOperation(
   affectedPaths: string[],
 ): Promise<Operation> {
   const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
-  const snapshots: FileSnapshot[] = await Promise.all(
-    affectedPaths.map(async (file) => {
-      try {
-        const isBinary = file.endsWith("rtk") || file.endsWith("rtk.exe");
-        const raw = await readFile(file);
-        const contents = isBinary
-          ? raw.toString("base64")
-          : raw.toString("utf8");
-        return { path: file, contents };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
-          return { path: file, contents: null };
-        throw error;
-      }
-    }),
-  );
+  const snapshots = await Promise.all(affectedPaths.map(snapshotPath));
   await mkdir(paths.backups, { recursive: true });
   const snapshotFile = path.join(paths.backups, `${id}.json`);
   await writeFile(
@@ -104,18 +163,7 @@ export async function restoreOperation(
   const snapshots = JSON.parse(
     await readFile(operation.snapshotFile, "utf8"),
   ) as FileSnapshot[];
-  for (const snapshot of snapshots) {
-    if (snapshot.contents === null) await rm(snapshot.path, { force: true });
-    else {
-      await mkdir(path.dirname(snapshot.path), { recursive: true });
-      const isBinary =
-        snapshot.path.endsWith("rtk") || snapshot.path.endsWith("rtk.exe");
-      const buffer = isBinary
-        ? Buffer.from(snapshot.contents, "base64")
-        : Buffer.from(snapshot.contents, "utf8");
-      await writeFile(snapshot.path, buffer);
-    }
-  }
+  for (const snapshot of snapshots) await restoreSnapshot(snapshot);
   await updateOperation(paths, id, "rolled-back");
   return operation;
 }
