@@ -77,13 +77,10 @@ export abstract class BaseAdapter implements ToolAdapter {
       );
       if (result.ran) executed.push(command);
       else skipped.push(command);
-      if (result.error) {
-        if (!command.optional || command.stopOnOptionalFailure) {
-          errors.push(result.error);
-          if (command.stopOnOptionalFailure)
-            skipped.push(...plan.commands.slice(index + 1));
-          break;
-        }
+      if (result.error && !command.optional) {
+        errors.push(result.error);
+        skipped.push(...plan.commands.slice(index + 1));
+        break;
       }
     }
     return { succeeded: errors.length === 0, executed, skipped, errors };

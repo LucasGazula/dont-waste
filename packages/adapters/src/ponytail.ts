@@ -37,8 +37,6 @@ function commandsFor(agent: AgentId): Command[] {
         command: "codex",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Codex",
-        optional: true,
-        stopOnOptionalFailure: true,
       },
       {
         command: "codex",
@@ -59,8 +57,6 @@ function commandsFor(agent: AgentId): Command[] {
         command: "claude",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Claude Code",
-        optional: true,
-        stopOnOptionalFailure: true,
       },
       {
         command: "claude",
@@ -74,8 +70,6 @@ function commandsFor(agent: AgentId): Command[] {
         command: "copilot",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Copilot CLI",
-        optional: true,
-        stopOnOptionalFailure: true,
       },
       {
         command: "copilot",

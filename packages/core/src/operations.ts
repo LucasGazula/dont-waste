@@ -43,10 +43,6 @@ async function writeState(paths: DataPaths, state: State): Promise<void> {
   await writeFile(paths.state, `${JSON.stringify(state, null, 2)}\n`);
 }
 
-function isBinaryPath(file: string): boolean {
-  return file.endsWith("rtk") || file.endsWith("rtk.exe");
-}
-
 async function snapshotPath(file: string): Promise<FileSnapshot> {
   try {
     const metadata = await lstat(file);
@@ -65,9 +61,7 @@ async function snapshotPath(file: string): Promise<FileSnapshot> {
     return {
       path: file,
       kind: "file",
-      contents: isBinaryPath(file)
-        ? raw.toString("base64")
-        : raw.toString("utf8"),
+      contents: raw.toString("base64"),
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
@@ -99,10 +93,7 @@ async function restoreSnapshot(snapshot: FileSnapshot): Promise<void> {
   }
   await removeSnapshotTarget(snapshot.path);
   await mkdir(path.dirname(snapshot.path), { recursive: true });
-  const buffer = isBinaryPath(snapshot.path)
-    ? Buffer.from(snapshot.contents, "base64")
-    : Buffer.from(snapshot.contents, "utf8");
-  await writeFile(snapshot.path, buffer);
+  await writeFile(snapshot.path, Buffer.from(snapshot.contents, "base64"));
 }
 
 export async function createOperation(

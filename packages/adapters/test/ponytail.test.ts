@@ -75,7 +75,6 @@ describe("ponytail mode persistence", () => {
 
     expect(plan.commands[0]).toMatchObject({
       label: "Add Ponytail marketplace to Codex",
-      optional: true,
     });
 
     const started: string[] = [];
@@ -134,8 +133,6 @@ describe("ponytail mode persistence", () => {
       expect.objectContaining({
         command: "codex",
         args: ["plugin", "marketplace", "add", "DietrichGebert/ponytail"],
-        optional: true,
-        stopOnOptionalFailure: true,
       }),
       expect.objectContaining({
         command: "codex",

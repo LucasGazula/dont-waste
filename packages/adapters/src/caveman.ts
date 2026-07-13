@@ -72,20 +72,11 @@ export function cavemanAntigravitySkillPath(
   );
 }
 
-function findAgentsDir(startDir: string): string | undefined {
-  let current = startDir;
-  while (true) {
-    const candidate = path.join(current, ".agents");
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
-  }
-  return undefined;
+function findAgentsDir(dir: string): string | undefined {
+  const candidate = path.join(dir, ".agents");
+  if (existsSync(candidate)) return candidate;
+  const parent = path.dirname(dir);
+  return parent === dir ? undefined : findAgentsDir(parent);
 }
 
 function cavemanGlobalSkillDir(context: Pick<AdapterContext, "home">): string {
@@ -112,12 +103,6 @@ function cavemanSkillTargetDir(
 }
 
 type CavemanSkillLinkState = "missing" | "canonical" | "conflict";
-
-function isCavemanSkillAgent(
-  agent: AgentId,
-): agent is "codex" | "antigravity-cli" {
-  return agent === "codex" || agent === "antigravity-cli";
-}
 
 async function cavemanSkillLinkState(
   agent: AgentId,
@@ -166,7 +151,10 @@ async function cavemanSkillConflicts(
   return (
     await Promise.all(
       context.selectedAgents
-        .filter(isCavemanSkillAgent)
+        .filter(
+          (agent): agent is "codex" | "antigravity-cli" =>
+            agent === "codex" || agent === "antigravity-cli",
+        )
         .map(async (agent) =>
           (await cavemanSkillLinkState(agent, context)) === "conflict"
             ? cavemanSkillConflictMessage(agent, context)
