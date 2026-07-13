@@ -30,6 +30,11 @@ function pathsFor(
       path.join(process.env.CODEX_HOME!, item.replace(/^~\/\.codex\//, "")),
     );
   }
+  if (definition.id === "copilot-cli" && process.env.COPILOT_HOME) {
+    return definition.configPaths[group].map((item) =>
+      path.join(process.env.COPILOT_HOME!, item.replace(/^~\/\.copilot\//, "")),
+    );
+  }
   const agentHome = context.home;
   return definition.configPaths[group].map((item) =>
     expandHome(item, agentHome),

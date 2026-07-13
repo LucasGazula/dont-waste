@@ -77,9 +77,18 @@ export const agents: readonly AgentDefinition[] = [
     label: "GitHub Copilot CLI",
     executable: "copilot",
     configPaths: {
-      linux: [`${home}/.copilot/config.json`],
-      darwin: [`${home}/.copilot/config.json`],
-      win32: [`${home}/.copilot/config.json`],
+      linux: [
+        `${home}/.copilot/settings.json`,
+        `${home}/.copilot/mcp-config.json`,
+      ],
+      darwin: [
+        `${home}/.copilot/settings.json`,
+        `${home}/.copilot/mcp-config.json`,
+      ],
+      win32: [
+        `${home}/.copilot/settings.json`,
+        `${home}/.copilot/mcp-config.json`,
+      ],
     },
   },
   {
@@ -87,9 +96,18 @@ export const agents: readonly AgentDefinition[] = [
     label: "Antigravity CLI",
     executable: "agy",
     configPaths: {
-      linux: [`${home}/.gemini/antigravity-cli/settings.json`],
-      darwin: [`${home}/.gemini/antigravity-cli/settings.json`],
-      win32: [`${home}/.gemini/antigravity-cli/settings.json`],
+      linux: [
+        `${home}/.gemini/antigravity-cli/settings.json`,
+        `${home}/.gemini/config/mcp_config.json`,
+      ],
+      darwin: [
+        `${home}/.gemini/antigravity-cli/settings.json`,
+        `${home}/.gemini/config/mcp_config.json`,
+      ],
+      win32: [
+        `${home}/.gemini/antigravity-cli/settings.json`,
+        `${home}/.gemini/config/mcp_config.json`,
+      ],
     },
   },
   {
@@ -137,10 +155,12 @@ export const upstream = {
   },
 } as const;
 
-const headroomWrapAgents: AgentId[] = [
+const headroomMcpAgents: AgentId[] = [
   "codex",
   "claude-code",
   "copilot-cli",
+  "antigravity-cli",
+  "opencode",
 ];
 export const capabilities: readonly Capability[] = agentIds.flatMap((agent) => {
   const result: Capability[] = [
@@ -166,11 +186,11 @@ export const capabilities: readonly Capability[] = agentIds.flatMap((agent) => {
       supportsMetrics: "unavailable",
     },
   ];
-  if (headroomWrapAgents.includes(agent)) {
+  if (headroomMcpAgents.includes(agent)) {
     result.push({
       tool: "headroom",
       agent,
-      installMethod: "proxy",
+      installMethod: "mcp",
       prerequisites: ["Python 3.10+", "headroom CLI"],
       supportsMetrics: "measured",
     });
@@ -178,8 +198,8 @@ export const capabilities: readonly Capability[] = agentIds.flatMap((agent) => {
     result.push({
       tool: "headroom",
       agent,
-      installMethod: "mcp",
-      prerequisites: ["Python 3.10+", "MCP configuration"],
+      installMethod: "extension",
+      prerequisites: ["Pi MCP bridge extension"],
       supportsMetrics: "measured",
     });
   }

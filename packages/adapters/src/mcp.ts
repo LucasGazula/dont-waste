@@ -24,6 +24,8 @@ export type McpRegisterResult = {
 const MARKER_START = "# --- Headroom MCP server ---";
 const MARKER_END = "# --- end Headroom MCP server ---";
 
+type McpOwnership = Partial<Record<AgentId, McpServerSpec>>;
+
 function specsMatch(
   existing: McpServerSpec,
   requested: McpServerSpec,
@@ -109,6 +111,66 @@ export function claudeMcpConfigPath(
   return path.join(context.home, ".claude", "mcp.json");
 }
 
+export function copilotMcpConfigPath(
+  context: Pick<AdapterContext, "home">,
+): string {
+  return path.join(
+    process.env.COPILOT_HOME ?? path.join(context.home, ".copilot"),
+    "mcp-config.json",
+  );
+}
+
+export function antigravityMcpConfigPath(
+  context: Pick<AdapterContext, "home">,
+): string {
+  return path.join(context.home, ".gemini", "config", "mcp_config.json");
+}
+
+export function mcpOwnershipPath(
+  context: Pick<AdapterContext, "home">,
+): string {
+  return path.join(context.home, ".config", "dont-waste", "mcp-ownership.json");
+}
+
+async function readMcpOwnership(
+  context: Pick<AdapterContext, "home">,
+): Promise<McpOwnership> {
+  try {
+    const parsed: unknown = JSON.parse(
+      await readFile(mcpOwnershipPath(context), "utf8"),
+    );
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as McpOwnership)
+      : {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+async function recordMcpOwnership(
+  agent: AgentId,
+  spec: McpServerSpec,
+  context: Pick<AdapterContext, "home">,
+): Promise<void> {
+  const ownership = await readMcpOwnership(context);
+  ownership[agent] = spec;
+  const file = mcpOwnershipPath(context);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
+}
+
+async function removeMcpOwnership(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home">,
+): Promise<void> {
+  const ownership = await readMcpOwnership(context);
+  delete ownership[agent];
+  const file = mcpOwnershipPath(context);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
+}
+
 export function opencodeConfigPath(
   context: Pick<AdapterContext, "home" | "platform">,
 ): string {
@@ -121,6 +183,8 @@ export function mcpConfigPath(
 ): string | undefined {
   if (agent === "codex") return codexConfigPath(context);
   if (agent === "claude-code") return claudeMcpConfigPath(context);
+  if (agent === "copilot-cli") return copilotMcpConfigPath(context);
+  if (agent === "antigravity-cli") return antigravityMcpConfigPath(context);
   if (agent === "opencode") return opencodeConfigPath(context);
   return undefined;
 }
@@ -139,7 +203,11 @@ export async function readMcpServer(
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       return undefined;
     const root = parsed as Record<string, unknown>;
-    if (agent === "claude-code") {
+    if (
+      agent === "claude-code" ||
+      agent === "copilot-cli" ||
+      agent === "antigravity-cli"
+    ) {
       const servers = root.mcpServers;
       if (!servers || typeof servers !== "object" || Array.isArray(servers))
         return undefined;
@@ -251,15 +319,23 @@ async function registerClaude(
   spec: McpServerSpec,
   context: Pick<AdapterContext, "home">,
 ): Promise<McpRegisterResult> {
-  const file = claudeMcpConfigPath(context);
+  return registerMcpServersJson("claude-code", spec, context);
+}
+
+async function registerMcpServersJson(
+  agent: "claude-code" | "copilot-cli" | "antigravity-cli",
+  spec: McpServerSpec,
+  context: Pick<AdapterContext, "home">,
+): Promise<McpRegisterResult> {
+  const file = mcpConfigPath(agent, { ...context, platform: "linux" })!;
   const existing = await readMcpServer(
-    "claude-code",
+    agent,
     { ...context, platform: "linux" },
     spec.name,
   );
   if (existing && specsMatch(existing, spec)) {
     return {
-      agent: "claude-code",
+      agent,
       status: "already",
       path: file,
       detail: "matches current configuration",
@@ -267,7 +343,7 @@ async function registerClaude(
   }
   if (existing) {
     return {
-      agent: "claude-code",
+      agent,
       status: "mismatch",
       path: file,
       detail: "existing headroom MCP entry differs; left untouched",
@@ -298,7 +374,7 @@ async function registerClaude(
     "utf8",
   );
   return {
-    agent: "claude-code",
+    agent,
     status: "registered",
     path: file,
     detail: `wrote ${file}`,
@@ -368,9 +444,21 @@ export async function registerHeadroomMcp(
   context: Pick<AdapterContext, "home" | "platform">,
 ): Promise<McpRegisterResult> {
   try {
-    if (agent === "codex") return registerCodex(spec, context);
-    if (agent === "claude-code") return registerClaude(spec, context);
-    if (agent === "opencode") return registerOpencode(spec, context);
+    const result =
+      agent === "codex"
+        ? await registerCodex(spec, context)
+        : agent === "claude-code"
+          ? await registerClaude(spec, context)
+          : agent === "copilot-cli" || agent === "antigravity-cli"
+            ? await registerMcpServersJson(agent, spec, context)
+            : agent === "opencode"
+              ? await registerOpencode(spec, context)
+              : undefined;
+    if (result) {
+      if (result.status === "registered" && agent !== "codex")
+        await recordMcpOwnership(agent, spec, context);
+      return result;
+    }
     return {
       agent,
       status: "unsupported",
@@ -438,7 +526,14 @@ async function unregisterCodex(
 async function unregisterClaude(
   context: Pick<AdapterContext, "home">,
 ): Promise<McpUnregisterResult> {
-  const file = claudeMcpConfigPath(context);
+  return unregisterMcpServersJson("claude-code", context);
+}
+
+async function unregisterMcpServersJson(
+  agent: "claude-code" | "copilot-cli" | "antigravity-cli",
+  context: Pick<AdapterContext, "home">,
+): Promise<McpUnregisterResult> {
+  const file = mcpConfigPath(agent, { ...context, platform: "linux" })!;
   let current: Record<string, unknown> = {};
   try {
     const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
@@ -447,10 +542,10 @@ async function unregisterClaude(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       return {
-        agent: "claude-code",
+        agent,
         status: "absent",
         path: file,
-        detail: "no mcp.json",
+        detail: "no MCP configuration",
       };
     throw error;
   }
@@ -462,10 +557,24 @@ async function unregisterClaude(
       : {};
   if (!("headroom" in servers))
     return {
-      agent: "claude-code",
+      agent,
       status: "absent",
       path: file,
       detail: "no headroom entry",
+    };
+  const ownership = await readMcpOwnership(context);
+  const existing = await readMcpServer(
+    agent,
+    { ...context, platform: "linux" },
+    "headroom",
+  );
+  if (!ownership[agent] || !existing || !specsMatch(existing, ownership[agent]))
+    return {
+      agent,
+      status: "preserved",
+      path: file,
+      detail:
+        "headroom entry is not recorded as Don’t Waste-owned; left untouched",
     };
   delete servers.headroom;
   await writeFile(
@@ -473,8 +582,9 @@ async function unregisterClaude(
     `${JSON.stringify({ ...current, mcpServers: servers }, null, 2)}\n`,
     "utf8",
   );
+  await removeMcpOwnership(agent, context);
   return {
-    agent: "claude-code",
+    agent,
     status: "removed",
     path: file,
     detail: "removed headroom MCP entry",
@@ -535,6 +645,8 @@ export async function unregisterHeadroomMcp(
   try {
     if (agent === "codex") return unregisterCodex(context);
     if (agent === "claude-code") return unregisterClaude(context);
+    if (agent === "copilot-cli" || agent === "antigravity-cli")
+      return unregisterMcpServersJson(agent, context);
     if (agent === "opencode") return unregisterOpencode(context);
     return {
       agent,

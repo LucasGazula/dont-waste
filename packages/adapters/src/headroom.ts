@@ -11,6 +11,7 @@ import { BaseAdapter } from "./base.js";
 import {
   headroomMcpSpec,
   mcpConfigPath,
+  mcpOwnershipPath,
   readMcpServer,
   registerHeadroomMcp,
   unregisterHeadroomMcp,
@@ -31,7 +32,13 @@ const wrapName: Partial<Record<AgentId, string>> = {
   "claude-code": "claude",
   "copilot-cli": "copilot",
 };
-const mcpAgents: AgentId[] = ["codex", "claude-code", "opencode"];
+const mcpAgents: AgentId[] = [
+  "codex",
+  "claude-code",
+  "copilot-cli",
+  "antigravity-cli",
+  "opencode",
+];
 
 export class HeadroomAdapter extends BaseAdapter {
   readonly id = "headroom" as const;
@@ -90,6 +97,9 @@ export class HeadroomAdapter extends BaseAdapter {
       ...context.selectedAgents
         .map((agent) => mcpConfigPath(agent, context))
         .filter((file): file is string => Boolean(file)),
+      ...(context.selectedAgents.some((agent) => mcpAgents.includes(agent))
+        ? [mcpOwnershipPath(context)]
+        : []),
     ];
     const unsupportedMcp = context.selectedAgents.filter(
       (agent) => !mcpAgents.includes(agent) && !wrapName[agent],
@@ -103,10 +113,11 @@ export class HeadroomAdapter extends BaseAdapter {
       commands,
       [
         "Headroom wrap starts an interactive agent session and is intentionally not launched by the installer.",
-        "Headroom MCP (stdio: `headroom mcp serve`) is merged into Codex/Claude/OpenCode configs when absent; existing mismatched entries are never replaced.",
-        ...unsupportedMcp.map(
-          (agent) =>
-            `${agent}: no Headroom wrap wrapper or structured MCP registrar yet; skipped.`,
+        "Headroom MCP (stdio: `headroom mcp serve`) is merged into Codex, Claude, Copilot, Antigravity, and OpenCode configs when absent; existing mismatched entries are never replaced.",
+        ...unsupportedMcp.map((agent) =>
+          agent === "pi"
+            ? "pi: Pi has no native MCP client; a dedicated bridge extension is required and is not installed automatically yet."
+            : `${agent}: no Headroom wrap wrapper or structured MCP registrar yet; skipped.`,
         ),
         ...wrapOnly.map(
           (agent) =>

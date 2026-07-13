@@ -3,22 +3,29 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  antigravityMcpConfigPath,
   codexConfigPath,
+  copilotMcpConfigPath,
   readMcpServer,
   registerHeadroomMcp,
+  unregisterHeadroomMcp,
   headroomMcpSpec,
 } from "../src/mcp.js";
 import { getAgentPaths } from "../src/agents.js";
 
 const inheritedCodexHome = process.env.CODEX_HOME;
+const inheritedCopilotHome = process.env.COPILOT_HOME;
 
 beforeEach(() => {
   delete process.env.CODEX_HOME;
+  delete process.env.COPILOT_HOME;
 });
 
 afterAll(() => {
   if (inheritedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = inheritedCodexHome;
+  if (inheritedCopilotHome === undefined) delete process.env.COPILOT_HOME;
+  else process.env.COPILOT_HOME = inheritedCopilotHome;
 });
 
 describe("mcp registration", () => {
@@ -47,6 +54,32 @@ describe("mcp registration", () => {
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("uses COPILOT_HOME for Copilot MCP configuration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const copilotHome = path.join(home, "managed-copilot");
+    const previousCopilotHome = process.env.COPILOT_HOME;
+    process.env.COPILOT_HOME = copilotHome;
+    try {
+      const spec = headroomMcpSpec("/usr/local/bin/headroom");
+      const result = await registerHeadroomMcp("copilot-cli", spec, {
+        home,
+        platform: "linux",
+      });
+      expect(result.path).toBe(path.join(copilotHome, "mcp-config.json"));
+      expect(
+        await readMcpServer(
+          "copilot-cli",
+          { home, platform: "linux" },
+          "headroom",
+        ),
+      ).toMatchObject(spec);
+    } finally {
+      if (previousCopilotHome === undefined) delete process.env.COPILOT_HOME;
+      else process.env.COPILOT_HOME = previousCopilotHome;
       await rm(home, { recursive: true, force: true });
     }
   });
@@ -117,9 +150,11 @@ describe("mcp registration", () => {
     expect(content).not.toContain("# --- Headroom MCP server ---");
   });
 
-  it("merges Claude and OpenCode JSON without replacing unrelated keys", async () => {
+  it("merges JSON MCP configurations without replacing unrelated keys", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
     await mkdir(path.join(home, ".claude"), { recursive: true });
+    await mkdir(path.join(home, ".copilot"), { recursive: true });
+    await mkdir(path.join(home, ".gemini", "config"), { recursive: true });
     await mkdir(path.join(home, ".config", "opencode"), { recursive: true });
     await writeFile(
       path.join(home, ".claude", "mcp.json"),
@@ -131,6 +166,16 @@ describe("mcp registration", () => {
       JSON.stringify({ plugin: ["keep"], mcp: {} }, null, 2),
       "utf8",
     );
+    await writeFile(
+      copilotMcpConfigPath({ home }),
+      JSON.stringify({ mcpServers: { keep: { command: "copilot-keep" } } }),
+      "utf8",
+    );
+    await writeFile(
+      antigravityMcpConfigPath({ home }),
+      JSON.stringify({ mcpServers: { keep: { command: "agy-keep" } } }),
+      "utf8",
+    );
     const spec = headroomMcpSpec("/opt/headroom");
     const context = { home, platform: "linux" as const };
 
@@ -140,6 +185,12 @@ describe("mcp registration", () => {
     expect((await registerHeadroomMcp("opencode", spec, context)).status).toBe(
       "registered",
     );
+    expect(
+      (await registerHeadroomMcp("copilot-cli", spec, context)).status,
+    ).toBe("registered");
+    expect(
+      (await registerHeadroomMcp("antigravity-cli", spec, context)).status,
+    ).toBe("registered");
 
     const claude = JSON.parse(
       await readFile(path.join(home, ".claude", "mcp.json"), "utf8"),
@@ -163,8 +214,71 @@ describe("mcp registration", () => {
       enabled: true,
     });
 
+    for (const [agent, file, expectedKeep] of [
+      ["copilot-cli", copilotMcpConfigPath({ home }), "copilot-keep"],
+      ["antigravity-cli", antigravityMcpConfigPath({ home }), "agy-keep"],
+    ] as const) {
+      const parsed = JSON.parse(await readFile(file, "utf8")) as {
+        mcpServers: Record<string, { command: string; args?: string[] }>;
+      };
+      expect(parsed.mcpServers.keep).toEqual({ command: expectedKeep });
+      expect(parsed.mcpServers.headroom).toEqual({
+        command: "/opt/headroom",
+        args: ["mcp", "serve"],
+      });
+      expect(await readMcpServer(agent, context, "headroom")).toMatchObject(
+        spec,
+      );
+    }
+
     expect(
       await readMcpServer("claude-code", context, "headroom"),
     ).toMatchObject(spec);
+  });
+
+  it("does not replace a conflicting Antigravity MCP server", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const file = antigravityMcpConfigPath({ home });
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          headroom: { command: "/other/headroom", args: ["mcp", "serve"] },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await registerHeadroomMcp(
+      "antigravity-cli",
+      headroomMcpSpec("/expected/headroom"),
+      { home, platform: "linux" },
+    );
+
+    expect(result.status).toBe("mismatch");
+    expect(await readFile(file, "utf8")).toContain("/other/headroom");
+  });
+
+  it("only removes JSON MCP entries recorded as Don’t Waste-owned", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const context = { home, platform: "linux" as const };
+    const spec = headroomMcpSpec("/opt/headroom");
+    await registerHeadroomMcp("antigravity-cli", spec, context);
+    expect(
+      (await unregisterHeadroomMcp("antigravity-cli", context)).status,
+    ).toBe("removed");
+
+    const file = antigravityMcpConfigPath({ home });
+    await writeFile(
+      file,
+      JSON.stringify({
+        mcpServers: { headroom: { command: "/user/headroom" } },
+      }),
+      "utf8",
+    );
+    expect(
+      (await unregisterHeadroomMcp("antigravity-cli", context)).status,
+    ).toBe("preserved");
   });
 });
