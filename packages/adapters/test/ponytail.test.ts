@@ -147,7 +147,7 @@ describe("ponytail mode persistence", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("does not re-register the marketplace for an existing Ponytail install", async () => {
+  it("does not rerun marketplace-dependent Codex commands for an existing Ponytail install", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
     await mkdir(path.join(home, ".config", "ponytail"), { recursive: true });
     await writeFile(
@@ -169,8 +169,14 @@ describe("ponytail mode persistence", () => {
     expect(plan.commands.some((command) => isMarketplaceCommand(command))).toBe(
       false,
     );
+    expect(plan.commands).not.toContainEqual(
+      expect.objectContaining({
+        command: "codex",
+        args: ["plugin", "add", "ponytail@ponytail"],
+      }),
+    );
     expect(plan.warnings).toContain(
-      "Existing Ponytail install detected; marketplace registration is skipped and existing sources are preserved.",
+      "Existing Ponytail install detected; marketplace registration and dependent plugin installation are skipped while existing sources are preserved.",
     );
     await rm(home, { recursive: true, force: true });
   });

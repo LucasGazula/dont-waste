@@ -109,6 +109,13 @@ function isMarketplaceRegistration(command: Command): boolean {
   );
 }
 
+function isMarketplaceDependentPlugin(command: Command): boolean {
+  return (
+    command.args[0] === "plugin" &&
+    (command.args[1] === "add" || command.args[1] === "install")
+  );
+}
+
 function uninstallCommandsFor(agent: AgentId): Command[] {
   if (agent === "codex")
     return [
@@ -229,7 +236,11 @@ export class PonytailAdapter extends BaseAdapter {
     const commands = context.selectedAgents.flatMap((agent) => {
       const planned = commandsFor(agent);
       return detected.detected
-        ? planned.filter((command) => !isMarketplaceRegistration(command))
+        ? planned.filter(
+            (command) =>
+              !isMarketplaceRegistration(command) &&
+              !isMarketplaceDependentPlugin(command),
+          )
         : planned;
     });
     const affectedPaths = context.selectedAgents.length
@@ -258,7 +269,7 @@ export class PonytailAdapter extends BaseAdapter {
           ["codex", "claude-code", "copilot-cli"].includes(agent),
         )
           ? detected.detected
-            ? "Existing Ponytail install detected; marketplace registration is skipped and existing sources are preserved."
+            ? "Existing Ponytail install detected; marketplace registration and dependent plugin installation are skipped while existing sources are preserved."
             : "Ponytail marketplace registration preserves existing sources; a rejected registration stops dependent plugin installation for review."
           : "",
       ].filter(Boolean),
