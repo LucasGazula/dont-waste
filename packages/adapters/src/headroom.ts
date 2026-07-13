@@ -30,7 +30,6 @@ const wrapName: Partial<Record<AgentId, string>> = {
   codex: "codex",
   "claude-code": "claude",
   "copilot-cli": "copilot",
-  opencode: "opencode",
 };
 const mcpAgents: AgentId[] = ["codex", "claude-code", "opencode"];
 
@@ -197,6 +196,7 @@ export class HeadroomAdapter extends BaseAdapter {
             : doctor.stderr ||
               doctor.stdout ||
               "headroom doctor reported warnings",
+        blocksActivation: false,
       });
     } catch (error) {
       checks.push({
@@ -204,6 +204,7 @@ export class HeadroomAdapter extends BaseAdapter {
         status: "fail",
         message: `headroom doctor could not run: ${error instanceof Error ? error.message : String(error)}`,
         remediation: "Check that the resolved Headroom binary is executable.",
+        blocksActivation: false,
       });
     }
     const headroomPath =
@@ -268,11 +269,6 @@ export class HeadroomAdapter extends BaseAdapter {
   async collectMetrics(context: AdapterContext): Promise<MetricImportResult> {
     const attempts: Array<{ source: string; args: string[] }> = [
       { source: "headroom perf", args: ["perf", "--format", "json"] },
-      {
-        source: "headroom output-savings",
-        args: ["output-savings", "--format", "json"],
-      },
-      { source: "headroom stats", args: ["stats", "--format", "json"] },
     ];
     const errors: string[] = [];
     for (const attempt of attempts) {

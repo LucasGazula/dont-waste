@@ -38,6 +38,8 @@ export type HealthCheck = {
   status: "pass" | "warn" | "fail";
   message: string;
   remediation?: string | undefined;
+  /** Advisory checks remain visible in doctor but do not prevent activation. */
+  blocksActivation?: boolean | undefined;
 };
 
 export type AdapterContext = {

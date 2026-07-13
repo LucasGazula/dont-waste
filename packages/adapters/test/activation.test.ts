@@ -86,4 +86,22 @@ describe("shouldActivateIntegration", () => {
       }),
     ).toBe(true);
   });
+
+  it("activates a configured MCP integration with an advisory proxy warning", () => {
+    expect(
+      shouldActivateIntegration({
+        profile: "balanced",
+        checks: [
+          pass,
+          {
+            id: "headroom-proxy",
+            status: "warn",
+            message: "proxy is not running",
+            blocksActivation: false,
+          },
+        ],
+        install: install(),
+      }),
+    ).toBe(true);
+  });
 });

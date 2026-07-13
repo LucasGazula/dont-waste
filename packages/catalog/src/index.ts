@@ -141,7 +141,6 @@ const headroomWrapAgents: AgentId[] = [
   "codex",
   "claude-code",
   "copilot-cli",
-  "opencode",
 ];
 export const capabilities: readonly Capability[] = agentIds.flatMap((agent) => {
   const result: Capability[] = [
