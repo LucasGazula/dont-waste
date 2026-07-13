@@ -328,11 +328,24 @@ async function registerMcpServersJson(
   context: Pick<AdapterContext, "home">,
 ): Promise<McpRegisterResult> {
   const file = mcpConfigPath(agent, { ...context, platform: "linux" })!;
-  const existing = await readMcpServer(
-    agent,
-    { ...context, platform: "linux" },
-    spec.name,
-  );
+  let existing: McpServerSpec | undefined;
+  try {
+    existing = await readMcpServer(
+      agent,
+      { ...context, platform: "linux" },
+      spec.name,
+    );
+  } catch (error) {
+    const content = await readFile(file, "utf8");
+    if (content.trim()) {
+      return {
+        agent,
+        status: "mismatch",
+        path: file,
+        detail: `invalid existing MCP JSON; left untouched (${error instanceof Error ? error.message : String(error)})`,
+      };
+    }
+  }
   if (existing && specsMatch(existing, spec)) {
     return {
       agent,
@@ -351,9 +364,12 @@ async function registerMcpServersJson(
   }
   let current: Record<string, unknown> = {};
   try {
-    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-      current = parsed as Record<string, unknown>;
+    const content = await readFile(file, "utf8");
+    if (content.trim()) {
+      const parsed: unknown = JSON.parse(content);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        current = parsed as Record<string, unknown>;
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

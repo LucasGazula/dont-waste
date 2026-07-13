@@ -260,6 +260,26 @@ describe("mcp registration", () => {
     expect(await readFile(file, "utf8")).toContain("/other/headroom");
   });
 
+  it("initializes an empty Antigravity MCP configuration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const file = antigravityMcpConfigPath({ home });
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "", "utf8");
+
+    const result = await registerHeadroomMcp(
+      "antigravity-cli",
+      headroomMcpSpec("/opt/headroom"),
+      { home, platform: "linux" },
+    );
+
+    expect(result.status).toBe("registered");
+    expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({
+      mcpServers: {
+        headroom: { command: "/opt/headroom", args: ["mcp", "serve"] },
+      },
+    });
+  });
+
   it("only removes JSON MCP entries recorded as Don’t Waste-owned", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
     const context = { home, platform: "linux" as const };
