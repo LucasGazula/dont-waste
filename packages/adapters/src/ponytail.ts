@@ -3,7 +3,13 @@ import path from "node:path";
 import type { AgentId, Mode } from "@dont-waste/catalog";
 import { getAgentPaths, ponytailConfigPath } from "./agents.js";
 import { BaseAdapter } from "./base.js";
-import { findExecutable, getActiveCodexProcesses, getCodexRuntimeDiagnostic, isCodexMarketplaceAvailable, directoryExists } from "./runtime.js";
+import {
+  findExecutable,
+  getActiveCodexProcesses,
+  getCodexRuntimeDiagnostic,
+  isCodexMarketplaceAvailable,
+  directoryExists,
+} from "./runtime.js";
 import type {
   AdapterContext,
   Command,
@@ -301,13 +307,19 @@ export class PonytailAdapter extends BaseAdapter {
       ? await getActiveCodexProcesses(context)
       : [];
     const codexActive = activeProcesses.length > 0;
-    
+
     const marketplaceAvailable = context.selectedAgents.includes("codex")
       ? await isCodexMarketplaceAvailable(context)
       : false;
 
-    const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
-    const staleMarketplaceDir = path.join(codexHome, ".tmp", "marketplaces", "ponytail");
+    const codexHome =
+      process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+    const staleMarketplaceDir = path.join(
+      codexHome,
+      ".tmp",
+      "marketplaces",
+      "ponytail",
+    );
     const staleDirExists = context.selectedAgents.includes("codex")
       ? await directoryExists(staleMarketplaceDir)
       : false;
@@ -321,8 +333,11 @@ export class PonytailAdapter extends BaseAdapter {
           return [];
         }
         return planned.filter((cmd) => {
-          if (isMarketplaceDependentPlugin(cmd) && !marketplaceAvailable) {
-            return false;
+          if (isMarketplaceDependentPlugin(cmd)) {
+            return !staleDirExists;
+          }
+          if (isMarketplaceRegistration(cmd)) {
+            return !marketplaceAvailable;
           }
           return true;
         });
@@ -342,14 +357,14 @@ export class PonytailAdapter extends BaseAdapter {
         warnings.push(
           `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Codex Ponytail plugin installation is blocked/deferred.`,
         );
-      } else if (!marketplaceAvailable) {
-        if (staleDirExists) {
+      } else {
+        if (staleDirExists && !marketplaceAvailable) {
           warnings.push(
-            "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration. Plugin installation is deferred. Please resolve this conflict (see doctor checks).",
+            "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration. Plugin installation is deferred. Please resolve this conflict first.",
           );
-        } else {
+        } else if (!marketplaceAvailable) {
           warnings.push(
-            "Codex Ponytail plugin installation is deferred because the ponytail marketplace is not registered.",
+            "Codex Ponytail plugin installation is planned to run after registering the ponytail marketplace.",
           );
         }
       }
@@ -390,10 +405,111 @@ export class PonytailAdapter extends BaseAdapter {
     );
   }
 
-  async install(plan: OperationPlan, context: AdapterContext) {
-    const base = await super.install(plan, context);
-    if (!base.succeeded || context.dryRun) return base;
-    if (!context.selectedAgents.length) return base;
+  async install(
+    plan: OperationPlan,
+    context: AdapterContext,
+  ): Promise<InstallResult> {
+    if (context.selectedAgents.includes("codex")) {
+      const active = await getActiveCodexProcesses(context);
+      if (active.length > 0) {
+        return {
+          succeeded: false,
+          executed: [],
+          skipped: plan.commands,
+          errors: [
+            `Active Codex processes detected targeting CODEX_HOME (PIDs: ${active.map((p) => p.pid).join(", ")}). Deferring Ponytail Codex installation to prevent overwriting/conflicts.`,
+          ],
+        };
+      }
+
+      const codexHome =
+        process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+      const staleMarketplaceDir = path.join(
+        codexHome,
+        ".tmp",
+        "marketplaces",
+        "ponytail",
+      );
+      const staleDirExists = await directoryExists(staleMarketplaceDir);
+      const marketplaceAvailableBefore =
+        await isCodexMarketplaceAvailable(context);
+
+      if (staleDirExists && !marketplaceAvailableBefore) {
+        return {
+          succeeded: false,
+          executed: [],
+          skipped: plan.commands,
+          errors: [
+            "Stale hidden Ponytail marketplace detected without registration. Codex Ponytail plugin installation is deferred/blocked. Please resolve this conflict first.",
+          ],
+        };
+      }
+    }
+
+    const executed: Command[] = [];
+    const skipped: Command[] = [];
+    const errors: string[] = [];
+
+    let codexPluginAdded = false;
+
+    for (const [index, command] of plan.commands.entries()) {
+      if (command.command === "codex" && command.args[1] === "add") {
+        const isMarketplaceVisible = await isCodexMarketplaceAvailable(context);
+        if (!isMarketplaceVisible) {
+          skipped.push(command);
+          errors.push(
+            "Marketplace 'DietrichGebert/ponytail' is not registered or visible in Codex; skipping plugin installation.",
+          );
+          skipped.push(...plan.commands.slice(index + 1));
+          break;
+        }
+      }
+
+      const result = await runCommand(
+        command,
+        context.dryRun,
+        commandHooksFromAdapterContext(context),
+      );
+
+      if (result.ran) {
+        executed.push(command);
+        if (command.command === "codex" && command.args[1] === "add") {
+          codexPluginAdded = true;
+        }
+      } else {
+        skipped.push(command);
+      }
+
+      if (result.error) {
+        if (!command.optional) {
+          errors.push(result.error);
+          skipped.push(...plan.commands.slice(index + 1));
+          break;
+        } else {
+          errors.push(`Optional command failed: ${result.error}`);
+        }
+      }
+    }
+
+    const codexWasTargeted = context.selectedAgents.includes("codex");
+    const codexFailed = codexWasTargeted && !codexPluginAdded;
+    const succeeded =
+      errors.filter((e) => !e.startsWith("Optional command failed")).length ===
+        0 && !codexFailed;
+
+    if (!succeeded || context.dryRun) {
+      return {
+        succeeded: false,
+        executed,
+        skipped,
+        errors,
+      };
+    }
+
+    if (!context.selectedAgents.length) {
+      return { succeeded: true, executed, skipped, errors };
+    }
+
     const configFile = ponytailConfigPath(context);
     const defaultMode = resolvePonytailMode(plan.selection.mode);
     await updateJson(configFile, (value) => ({
@@ -403,6 +519,7 @@ export class PonytailAdapter extends BaseAdapter {
     }));
     await mkdir(path.dirname(ponytailActivePath(context)), { recursive: true });
     await writeFile(ponytailActivePath(context), `${defaultMode}\n`, "utf8");
+
     if (context.selectedAgents.includes("opencode")) {
       const config = getAgentPaths("opencode", context)[0];
       if (config)
@@ -418,7 +535,8 @@ export class PonytailAdapter extends BaseAdapter {
           };
         });
     }
-    return base;
+
+    return { succeeded: true, executed, skipped, errors };
   }
 
   async verify(
@@ -473,19 +591,28 @@ export class PonytailAdapter extends BaseAdapter {
     if (context.selectedAgents.includes("codex")) {
       checks.push(await getCodexRuntimeDiagnostic(context));
 
-      const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
-      const staleMarketplaceDir = path.join(codexHome, ".tmp", "marketplaces", "ponytail");
+      const codexHome =
+        process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+      const staleMarketplaceDir = path.join(
+        codexHome,
+        ".tmp",
+        "marketplaces",
+        "ponytail",
+      );
       const staleDirExists = await directoryExists(staleMarketplaceDir);
       const marketplaceAvailable = await isCodexMarketplaceAvailable(context);
 
-      const mcpExplanatoryNote = ". Note: Ponytail is a Codex plugin and does not register as an MCP server; checking '/mcp' inside Codex will NOT show Ponytail.";
+      const mcpExplanatoryNote =
+        ". Note: Ponytail is a Codex plugin and does not register as an MCP server; checking '/mcp' inside Codex will NOT show Ponytail.";
 
       // 1. Marketplace ownership / visibility check
       if (staleDirExists && !marketplaceAvailable) {
         checks.push({
           id: "ponytail-codex-marketplace-conflict",
           status: "fail",
-          message: "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration" + mcpExplanatoryNote,
+          message:
+            "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration" +
+            mcpExplanatoryNote,
           remediation: `A conflicting user-owned ponytail marketplace directory exists but is not registered.
 To migrate:
   1. Ensure all Codex processes are closed.
@@ -503,10 +630,13 @@ To reverse:
         checks.push({
           id: "ponytail-codex-marketplace",
           status: marketplaceAvailable ? "pass" : "fail",
-          message: (marketplaceAvailable
-            ? "Codex Ponytail marketplace is registered and visible"
-            : "Codex Ponytail marketplace is not registered") + mcpExplanatoryNote,
-          remediation: "Run 'dont-waste init' to register the Ponytail marketplace in Codex.",
+          message:
+            (marketplaceAvailable
+              ? "Codex Ponytail marketplace is registered and visible"
+              : "Codex Ponytail marketplace is not registered") +
+            mcpExplanatoryNote,
+          remediation:
+            "Run 'dont-waste init' to register the Ponytail marketplace in Codex.",
         });
       }
 
@@ -515,17 +645,22 @@ To reverse:
       checks.push({
         id: "ponytail-codex-plugin",
         status: pluginInstalled ? "pass" : "fail",
-        message: (pluginInstalled
-          ? "Codex Ponytail plugin is installed and enabled"
-          : "Codex Ponytail plugin is not installed/enabled") + mcpExplanatoryNote,
-        remediation: "Ensure the Ponytail marketplace is registered, then run 'dont-waste init' to install the plugin.",
+        message:
+          (pluginInstalled
+            ? "Codex Ponytail plugin is installed and enabled"
+            : "Codex Ponytail plugin is not installed/enabled") +
+          mcpExplanatoryNote,
+        remediation:
+          "Ensure the Ponytail marketplace is registered, then run 'dont-waste init' to install the plugin.",
       });
 
       // 3. Hook approval check
       checks.push({
         id: "ponytail-codex-hooks-trust",
         status: "warn",
-        message: "Codex Ponytail hook approval requires manual trust in the Codex /hooks screen" + mcpExplanatoryNote,
+        message:
+          "Codex Ponytail hook approval requires manual trust in the Codex /hooks screen" +
+          mcpExplanatoryNote,
         remediation: "Open Codex /hooks and trust the Ponytail plugin hooks.",
         blocksActivation: false,
       });
@@ -534,7 +669,9 @@ To reverse:
       checks.push({
         id: "ponytail-codex-new-thread",
         status: "warn",
-        message: "Ponytail plugin loading requires starting a fresh conversation thread in Codex" + mcpExplanatoryNote,
+        message:
+          "Ponytail plugin loading requires starting a fresh conversation thread in Codex" +
+          mcpExplanatoryNote,
         remediation: "Start a new thread in Codex to load the Ponytail plugin.",
         blocksActivation: false,
       });
@@ -555,7 +692,8 @@ To reverse:
               id: `ponytail-${agent}`,
               status: "fail",
               message: `${label} Ponytail plugin is not enabled`,
-              remediation: "Install or enable Ponytail in this host, then start a new session.",
+              remediation:
+                "Install or enable Ponytail in this host, then start a new session.",
             },
       );
     }

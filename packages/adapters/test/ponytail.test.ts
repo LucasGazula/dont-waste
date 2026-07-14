@@ -248,8 +248,87 @@ describe("ponytail mode persistence", () => {
       );
       expect(conflictCheck).toBeDefined();
       expect(conflictCheck?.status).toBe("fail");
-      expect(conflictCheck?.message).toContain("Stale hidden Ponytail marketplace detected");
+      expect(conflictCheck?.message).toContain(
+        "Stale hidden Ponytail marketplace detected",
+      );
       expect(conflictCheck?.remediation).toContain("mv ");
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      delete process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Ponytail installation on live Codex session", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    const previousProcesses = process.env.DONT_WASTE_MOCK_CODEX_PROCESSES;
+    process.env.DONT_WASTE_MOCK_CODEX_PROCESSES = JSON.stringify([
+      { pid: 99999, cmdline: "codex" },
+    ]);
+
+    try {
+      const adapter = new PonytailAdapter();
+      const plan = await adapter.planInstall(
+        { mode: "full", features: {} },
+        {
+          platform: "linux",
+          home,
+          selectedAgents: ["codex"],
+          dryRun: true,
+        },
+      );
+
+      const result = await adapter.install(plan, {
+        platform: "linux",
+        home,
+        selectedAgents: ["codex"],
+        dryRun: false,
+      });
+
+      expect(result.succeeded).toBe(false);
+      expect(result.errors[0]).toContain("Active Codex processes detected");
+    } finally {
+      if (previousProcesses === undefined)
+        delete process.env.DONT_WASTE_MOCK_CODEX_PROCESSES;
+      else process.env.DONT_WASTE_MOCK_CODEX_PROCESSES = previousProcesses;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Ponytail installation on stale marketplace conflict", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    const codexHome = path.join(home, "codex-home");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = "false";
+
+    try {
+      const staleDir = path.join(codexHome, ".tmp", "marketplaces", "ponytail");
+      await mkdir(staleDir, { recursive: true });
+
+      const adapter = new PonytailAdapter();
+      const plan = await adapter.planInstall(
+        { mode: "full", features: {} },
+        {
+          platform: "linux",
+          home,
+          selectedAgents: ["codex"],
+          dryRun: true,
+        },
+      );
+
+      const result = await adapter.install(plan, {
+        platform: "linux",
+        home,
+        selectedAgents: ["codex"],
+        dryRun: false,
+      });
+
+      expect(result.succeeded).toBe(false);
+      expect(result.errors[0]).toContain(
+        "Stale hidden Ponytail marketplace detected",
+      );
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
 import { type AgentId } from "@dont-waste/catalog";
@@ -17,7 +18,13 @@ import {
   unregisterHeadroomMcp,
   type McpRegisterResult,
 } from "./mcp.js";
-import { executableDetection, findExecutable, getActiveCodexProcesses, getCodexRuntimeDiagnostic } from "./runtime.js";
+import {
+  executableDetection,
+  findExecutable,
+  getActiveCodexProcesses,
+  getCodexRuntimeDiagnostic,
+  fileExists,
+} from "./runtime.js";
 import type {
   AdapterContext,
   HealthCheck,
@@ -51,13 +58,27 @@ export class HeadroomAdapter extends BaseAdapter {
     selection: ToolSelection,
     context: AdapterContext,
   ): Promise<OperationPlan> {
-    const detected = await this.detect(context);
+    const activeProcesses = context.selectedAgents.includes("codex")
+      ? await getActiveCodexProcesses(context)
+      : [];
+    const codexActive = activeProcesses.length > 0;
+
+    const filteredAgents = codexActive
+      ? context.selectedAgents.filter((agent) => agent !== "codex")
+      : context.selectedAgents;
+
+    const planningContext = {
+      ...context,
+      selectedAgents: filteredAgents,
+    };
+
+    const detected = await this.detect(planningContext);
     const commands = [];
     if (!detected.detected) {
       const uv = await findExecutable(
         "uv",
-        context.platform,
-        context.abortSignal,
+        planningContext.platform,
+        planningContext.abortSignal,
       );
       commands.push(
         uv
@@ -79,7 +100,7 @@ export class HeadroomAdapter extends BaseAdapter {
             },
       );
     }
-    for (const agent of context.selectedAgents) {
+    for (const agent of planningContext.selectedAgents) {
       const wrapper = wrapName[agent];
       if (wrapper)
         commands.push({
@@ -91,23 +112,28 @@ export class HeadroomAdapter extends BaseAdapter {
         });
     }
     const affectedPaths = [
-      ...context.selectedAgents.flatMap((agent) =>
-        getAgentPaths(agent, context),
+      ...planningContext.selectedAgents.flatMap((agent) =>
+        getAgentPaths(agent, planningContext),
       ),
-      ...context.selectedAgents
-        .map((agent) => mcpConfigPath(agent, context))
+      ...planningContext.selectedAgents
+        .map((agent) => mcpConfigPath(agent, planningContext))
         .filter((file): file is string => Boolean(file)),
-      ...(context.selectedAgents.some((agent) => mcpAgents.includes(agent))
-        ? [mcpOwnershipPath(context)]
+      ...(planningContext.selectedAgents.some((agent) =>
+        mcpAgents.includes(agent),
+      )
+        ? [mcpOwnershipPath(planningContext)]
         : []),
     ];
-    const unsupportedMcp = context.selectedAgents.filter(
+    const unsupportedMcp = planningContext.selectedAgents.filter(
       (agent) => !mcpAgents.includes(agent) && !wrapName[agent],
     );
-    const wrapOnly = context.selectedAgents.filter(
+    const wrapOnly = planningContext.selectedAgents.filter(
       (agent) => wrapName[agent] && !mcpAgents.includes(agent),
     );
     const warnings = [
+      codexActive
+        ? `Active Codex processes detected targeting CODEX_HOME (PIDs: ${activeProcesses.map((p) => p.pid).join(", ")}). Codex Headroom MCP registration will be blocked/deferred.`
+        : "",
       "Headroom wrap starts an interactive agent session and is intentionally not launched by the installer.",
       "Headroom MCP (stdio: `headroom mcp serve`) is merged into Codex, Claude, Copilot, Antigravity, and OpenCode configs when absent; existing mismatched entries are never replaced.",
       ...unsupportedMcp.map((agent) =>
@@ -128,23 +154,9 @@ export class HeadroomAdapter extends BaseAdapter {
       ...pendingAdvancedControlNotes(["headroom"]),
     ].filter(Boolean);
 
-    if (context.selectedAgents.includes("codex")) {
-      const activeProcesses = await getActiveCodexProcesses(context);
-      if (activeProcesses.length > 0) {
-        const pids = activeProcesses.map((p) => p.pid).join(", ");
-        warnings.push(
-          `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Codex Headroom MCP registration will be blocked/deferred.`,
-        );
-      }
-    }
-
-    return this.basePlan(
-      selection,
-      context,
-      commands,
-      warnings,
-      [...new Set(affectedPaths)],
-    );
+    return this.basePlan(selection, planningContext, commands, warnings, [
+      ...new Set(affectedPaths),
+    ]);
   }
 
   async install(
@@ -276,17 +288,35 @@ export class HeadroomAdapter extends BaseAdapter {
             : `Headroom MCP for ${agent} is present but feature env differs (marker-owned Codex entries can be refreshed on init)`,
         });
 
-        const activeProcesses = agent === "codex" ? await getActiveCodexProcesses(context) : [];
-        const pidsStr = activeProcesses.length > 0 ? activeProcesses.map((p) => p.pid).join(", ") : "none";
-        checks.push({
-          id: `headroom-mcp-${agent}-acceptance`,
-          status: "warn",
-          message: `Fresh-session acceptance test pending for ${agent}. A file configuration alone does not prove session load.`,
-          remediation: agent === "codex"
-            ? `Close all active Codex processes (PIDs: ${pidsStr}), open a fresh Codex session, and run '/mcp' to verify headroom tools.`
-            : `Open a fresh ${agent} session and verify headroom tools are available.`,
-          blocksActivation: false,
-        });
+        const activeProcesses =
+          agent === "codex" ? await getActiveCodexProcesses(context) : [];
+        const pidsStr =
+          activeProcesses.length > 0
+            ? activeProcesses.map((p) => p.pid).join(", ")
+            : "none";
+        const acceptanceFile = path.join(
+          context.home,
+          `.headroom-mcp-${agent}-accepted`,
+        );
+        const accepted = await fileExists(acceptanceFile);
+        if (accepted) {
+          checks.push({
+            id: `headroom-mcp-${agent}-acceptance`,
+            status: "pass",
+            message: `Fresh-session acceptance test passed for ${agent}.`,
+          });
+        } else {
+          checks.push({
+            id: `headroom-mcp-${agent}-acceptance`,
+            status: "fail",
+            message: `Fresh-session acceptance test pending for ${agent}. A file configuration alone does not prove session load.`,
+            remediation:
+              agent === "codex"
+                ? `Close all active Codex processes (PIDs: ${pidsStr}), open a fresh Codex session, run '/mcp' to verify headroom tools, and create the file '${acceptanceFile}' to record acceptance.`
+                : `Open a fresh ${agent} session, verify headroom tools are available, and create the file '${acceptanceFile}' to record acceptance.`,
+            blocksActivation: true,
+          });
+        }
       } else {
         checks.push({
           id: `headroom-mcp-${agent}`,

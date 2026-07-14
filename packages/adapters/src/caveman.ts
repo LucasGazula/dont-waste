@@ -339,33 +339,49 @@ export class CavemanAdapter extends BaseAdapter {
     selection: ToolSelection,
     context: AdapterContext,
   ): Promise<OperationPlan> {
-    const unsupported = context.selectedAgents.filter(
+    const activeProcesses = context.selectedAgents.includes("codex")
+      ? await getActiveCodexProcesses(context)
+      : [];
+    const codexActive = activeProcesses.length > 0;
+
+    const filteredAgents = codexActive
+      ? context.selectedAgents.filter((agent) => agent !== "codex")
+      : context.selectedAgents;
+
+    const planningContext = {
+      ...context,
+      selectedAgents: filteredAgents,
+    };
+
+    const unsupported = planningContext.selectedAgents.filter(
       (agent) => !cavemanOnlyId[agent],
     );
     const mode = resolveCavemanMode(selection.mode);
-    const affectedPaths = cavemanActivePaths(context);
-    if (context.selectedAgents.length) {
-      affectedPaths.push(cavemanConfigPath(context));
-      const skillTargetDirs = context.selectedAgents
-        .map((agent) => cavemanSkillTargetDir(agent, context))
+    const affectedPaths = cavemanActivePaths(planningContext);
+    if (planningContext.selectedAgents.length) {
+      affectedPaths.push(cavemanConfigPath(planningContext));
+      const skillTargetDirs = planningContext.selectedAgents
+        .map((agent) => cavemanSkillTargetDir(agent, planningContext))
         .filter((targetDir): targetDir is string => Boolean(targetDir));
       if (skillTargetDirs.length) {
-        const globalSkillDir = cavemanGlobalSkillDir(context);
+        const globalSkillDir = cavemanGlobalSkillDir(planningContext);
         affectedPaths.push(path.dirname(globalSkillDir), globalSkillDir);
         for (const targetDir of skillTargetDirs) {
           affectedPaths.push(path.dirname(targetDir), targetDir);
         }
       }
-      if (context.selectedAgents.includes("claude-code")) {
+      if (planningContext.selectedAgents.includes("claude-code")) {
         affectedPaths.push(claudeProjectSettingsPath());
       }
     }
     const installTargets = (
       await Promise.all(
-        context.selectedAgents
+        planningContext.selectedAgents
           .filter((agent) => cavemanOnlyId[agent])
           .map(async (agent) =>
-            (await cavemanAgentInstalled(agent, context)) ? undefined : agent,
+            (await cavemanAgentInstalled(agent, planningContext))
+              ? undefined
+              : agent,
           ),
       )
     ).filter((agent): agent is AgentId => Boolean(agent));
@@ -374,7 +390,10 @@ export class CavemanAdapter extends BaseAdapter {
         ? [
             {
               command: "npx",
-              args: installArgs({ ...context, selectedAgents: installTargets }),
+              args: installArgs({
+                ...planningContext,
+                selectedAgents: installTargets,
+              }),
               label: "Run the official Caveman installer for selected agents",
               env: { CI: "true" },
               timeoutMs: 180_000,
@@ -382,7 +401,7 @@ export class CavemanAdapter extends BaseAdapter {
             },
           ]
         : []),
-      ...(context.selectedAgents.includes("claude-code")
+      ...(planningContext.selectedAgents.includes("claude-code")
         ? [
             {
               command: "claude",
@@ -399,16 +418,19 @@ export class CavemanAdapter extends BaseAdapter {
           ]
         : []),
     ];
-    const supportedSelected = context.selectedAgents.filter(
+    const supportedSelected = planningContext.selectedAgents.filter(
       (agent) => cavemanOnlyId[agent],
     );
-    const skillConflicts = await cavemanSkillConflicts(context);
+    const skillConflicts = await cavemanSkillConflicts(planningContext);
     return this.basePlan(
       selection,
-      context,
+      planningContext,
       commands,
       [
-        context.selectedAgents.length === 0
+        codexActive
+          ? `Active Codex processes detected targeting CODEX_HOME (PIDs: ${activeProcesses.map((p) => p.pid).join(", ")}). Caveman Codex setup is blocked/deferred.`
+          : undefined,
+        planningContext.selectedAgents.length === 0
           ? "install-only: Caveman binary/skills install may run, but Don’t Waste will not write agent marker files."
           : installTargets.length
             ? `Caveman mode: ${mode}. Official installer targets: ${installTargets.join(", ")}.`
@@ -432,7 +454,7 @@ export class CavemanAdapter extends BaseAdapter {
           (message) =>
             `${message}. Don’t Waste will preserve it and stop before installation.`,
         ),
-      ].filter(Boolean),
+      ].filter((m): m is string => Boolean(m)),
       [...new Set(affectedPaths)],
     );
   }
@@ -441,6 +463,20 @@ export class CavemanAdapter extends BaseAdapter {
     plan: OperationPlan,
     context: AdapterContext,
   ): Promise<InstallResult> {
+    if (context.selectedAgents.includes("codex")) {
+      const active = await getActiveCodexProcesses(context);
+      if (active.length > 0) {
+        return {
+          succeeded: false,
+          executed: [],
+          skipped: plan.commands,
+          errors: [
+            `Active Codex processes detected targeting CODEX_HOME (PIDs: ${active.map((p) => p.pid).join(", ")}). Deferring Caveman Codex installation to prevent overwriting/conflicts.`,
+          ],
+        };
+      }
+    }
+
     if (!context.dryRun) {
       const conflicts = await cavemanSkillConflicts(context);
       if (conflicts.length)
@@ -670,6 +706,19 @@ export class CavemanAdapter extends BaseAdapter {
   }
 
   async uninstall(context: AdapterContext): Promise<InstallResult> {
+    if (context.selectedAgents.includes("codex")) {
+      const active = await getActiveCodexProcesses(context);
+      if (active.length > 0) {
+        return {
+          succeeded: false,
+          executed: [],
+          skipped: [],
+          errors: [
+            `Active Codex processes detected targeting CODEX_HOME (PIDs: ${active.map((p) => p.pid).join(", ")}). Deferring Caveman Codex cleanup to prevent overwriting/conflicts.`,
+          ],
+        };
+      }
+    }
     // Only remove Don’t Waste marker files; do not run the upstream uninstaller (would touch user-managed skills).
     const targets = await this.uninstallPaths(context);
     const errors: string[] = [];
@@ -771,10 +820,11 @@ async function cavemanSkillHealthCheck(
   const label = agent === "codex" ? "Codex" : "Antigravity";
   const state = await cavemanSkillLinkState(agent, context);
   const isPass = await hasCanonicalCavemanSkillLink(agent, context);
-  
-  const mcpExplanatoryNote = agent === "codex"
-    ? ". Note: Caveman is a Codex skill and does not register as an MCP server; checking '/mcp' inside Codex will NOT show Caveman. Instead, run '/caveman' in a Codex session to activate/verify it."
-    : ". Note: Caveman is an Antigravity skill and does not register as an MCP server.";
+
+  const mcpExplanatoryNote =
+    agent === "codex"
+      ? ". Note: Caveman is a Codex skill and does not register as an MCP server; checking '/mcp' inside Codex will NOT show Caveman. Instead, run '/caveman' in a Codex session to activate/verify it."
+      : ". Note: Caveman is an Antigravity skill and does not register as an MCP server.";
 
   return isPass
     ? {
@@ -783,12 +833,15 @@ async function cavemanSkillHealthCheck(
         message:
           (state === "canonical"
             ? `${label} Caveman skill is linked to the canonical global skill at ${file}`
-            : `${label} Caveman skill is linked to a valid external skill source at ${file}`) + mcpExplanatoryNote,
+            : `${label} Caveman skill is linked to a valid external skill source at ${file}`) +
+          mcpExplanatoryNote,
       }
     : {
         id: `caveman-${agent === "codex" ? "codex" : "antigravity"}-skill`,
         status: "fail",
-        message: `${label} Caveman skill is not linked to the canonical global skill at ${file}` + mcpExplanatoryNote,
+        message:
+          `${label} Caveman skill is not linked to the canonical global skill at ${file}` +
+          mcpExplanatoryNote,
         remediation:
           "Preserve the existing skill target, resolve the conflict, then rerun dont-waste init and start a new session.",
       };

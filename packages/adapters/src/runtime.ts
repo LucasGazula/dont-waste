@@ -2,7 +2,13 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
-import type { Command, DetectionResult, RunCommandHooks, AdapterContext, HealthCheck } from "./types.js";
+import type {
+  Command,
+  DetectionResult,
+  RunCommandHooks,
+  AdapterContext,
+  HealthCheck,
+} from "./types.js";
 
 /** Default bound for non-interactive upstream installers (avoids infinite prompt hangs). */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
@@ -164,10 +170,19 @@ export function commandHooksFromAdapterContext(context: {
   });
 }
 
-export async function directoryExists(filePath: string): Promise<boolean> {
+export async function directoryExists(dirPath: string): Promise<boolean> {
+  try {
+    const info = await stat(dirPath);
+    return info.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export async function fileExists(filePath: string): Promise<boolean> {
   try {
     const info = await stat(filePath);
-    return info.isDirectory();
+    return info.isFile();
   } catch {
     return false;
   }
@@ -202,13 +217,19 @@ export async function getActiveCodexProcesses(
       if (!/^\d+$/.test(entry)) continue;
       const pid = parseInt(entry, 10);
       try {
-        const cmdline = await readFile(path.join("/proc", entry, "cmdline"), "utf8");
+        const cmdline = await readFile(
+          path.join("/proc", entry, "cmdline"),
+          "utf8",
+        );
         const lowerCmd = cmdline.toLowerCase();
-        if (!lowerCmd.includes("codex") && !lowerCmd.includes("node")) {
+        if (!lowerCmd.includes("codex")) {
           continue;
         }
 
-        const environ = await readFile(path.join("/proc", entry, "environ"), "utf8");
+        const environ = await readFile(
+          path.join("/proc", entry, "environ"),
+          "utf8",
+        );
         const envs = environ.split("\0");
         let processCodexHome: string | undefined;
         let processHome: string | undefined;
@@ -246,7 +267,11 @@ export async function getCodexRuntimeDiagnostic(
   context: Pick<AdapterContext, "platform" | "home" | "abortSignal">,
 ): Promise<HealthCheck> {
   const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
-  const codexPath = await findExecutable("codex", context.platform, context.abortSignal);
+  const codexPath = await findExecutable(
+    "codex",
+    context.platform,
+    context.abortSignal,
+  );
   let version = "unknown";
 
   if (codexPath) {
@@ -261,7 +286,7 @@ export async function getCodexRuntimeDiagnostic(
     }
   }
 
-  const message = `Codex Runtime: binary=${codexPath || "not found"}, version=${version}, effective CODEX_HOME=${codexHome}. Note: Codex TUI may display a different version (e.g. 0.144.0) than the CLI (e.g. 0.144.3) due to process/caching discrepancies.`;
+  const message = `Codex Runtime: binary=${codexPath || "not found"}, version=${version}, effective CODEX_HOME=${codexHome}.`;
 
   return {
     id: "codex-runtime-diagnostic",
@@ -281,16 +306,26 @@ export async function isCodexMarketplaceAvailable(
     return true;
   }
   try {
-    const codexPath = await findExecutable("codex", context.platform, context.abortSignal);
+    const codexPath = await findExecutable(
+      "codex",
+      context.platform,
+      context.abortSignal,
+    );
     if (!codexPath) return false;
-    const { stdout } = await execa(codexPath, ["plugin", "marketplace", "list"], {
-      env: {
-        ...process.env,
-        ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
+    const { stdout } = await execa(
+      codexPath,
+      ["plugin", "marketplace", "list"],
+      {
+        env: {
+          ...process.env,
+          ...(process.env.CODEX_HOME
+            ? { CODEX_HOME: process.env.CODEX_HOME }
+            : {}),
+        },
+        timeout: 5000,
+        ...(context.abortSignal ? { cancelSignal: context.abortSignal } : {}),
       },
-      timeout: 5000,
-      ...(context.abortSignal ? { cancelSignal: context.abortSignal } : {}),
-    });
+    );
     return stdout.split("\n").some((line) => {
       const parts = line.trim().split(/\s+/);
       return parts[0] === "ponytail";

@@ -932,11 +932,12 @@ async function runDoctor(options: CommonOptions): Promise<void> {
   const config = await readConfig(paths);
   const adapters = createAdapters();
   const configured = configuredToolsFromConfig(config);
+  const detectionCtx = context([], true);
+  const detectedAgents = await detectAgents(detectionCtx);
   const checks = [];
   for (const tool of toolIds) {
     const entry = configured.find((item) => item.tool === tool);
     const adapter = adapters[tool];
-    const detectionCtx = context([], true);
     const detection = await adapter.detect(detectionCtx);
 
     if (!entry && !detection.detected) {
@@ -951,7 +952,13 @@ async function runDoctor(options: CommonOptions): Promise<void> {
 
     const agentsToVerify = entry
       ? entry.agents
-      : agents.map((a) => a.id).filter((agent) => adapter.getCapabilities(agent).length > 0);
+      : agents
+          .map((a) => a.id)
+          .filter((agentId) => {
+            if (adapter.getCapabilities(agentId).length === 0) return false;
+            const det = detectedAgents.find((a) => a.agent === agentId);
+            return det ? det.detected || det.existingConfigs.length > 0 : false;
+          });
     const selection = entry
       ? entry.selection
       : { mode: "full" as const, features: {} };
