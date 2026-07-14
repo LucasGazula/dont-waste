@@ -14,7 +14,11 @@ import type { AgentId, Mode } from "@dont-waste/catalog";
 import { importCavemanStats } from "@dont-waste/telemetry";
 import { getAgentPaths } from "./agents.js";
 import { BaseAdapter } from "./base.js";
-import { findExecutable, getCodexRuntimeDiagnostic } from "./runtime.js";
+import {
+  findExecutable,
+  getCodexRuntimeDiagnostic,
+  getActiveCodexProcesses,
+} from "./runtime.js";
 import type {
   AdapterContext,
   DetectionResult,

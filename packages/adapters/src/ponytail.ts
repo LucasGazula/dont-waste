@@ -9,6 +9,8 @@ import {
   getCodexRuntimeDiagnostic,
   isCodexMarketplaceAvailable,
   directoryExists,
+  runCommand,
+  commandHooksFromAdapterContext,
 } from "./runtime.js";
 import type {
   AdapterContext,
@@ -453,7 +455,10 @@ export class PonytailAdapter extends BaseAdapter {
     let codexPluginAdded = false;
 
     for (const [index, command] of plan.commands.entries()) {
-      if (command.command === "codex" && command.args[1] === "add") {
+      if (
+        (command.command === "codex" && command.args[1] === "add") ||
+        command.label === "Install Ponytail plugin in Codex"
+      ) {
         const isMarketplaceVisible = await isCodexMarketplaceAvailable(context);
         if (!isMarketplaceVisible) {
           skipped.push(command);
@@ -473,7 +478,10 @@ export class PonytailAdapter extends BaseAdapter {
 
       if (result.ran) {
         executed.push(command);
-        if (command.command === "codex" && command.args[1] === "add") {
+        if (
+          (command.command === "codex" && command.args[1] === "add") ||
+          command.label === "Install Ponytail plugin in Codex"
+        ) {
           codexPluginAdded = true;
         }
       } else {
@@ -485,17 +493,13 @@ export class PonytailAdapter extends BaseAdapter {
           errors.push(result.error);
           skipped.push(...plan.commands.slice(index + 1));
           break;
-        } else {
-          errors.push(`Optional command failed: ${result.error}`);
         }
       }
     }
 
     const codexWasTargeted = context.selectedAgents.includes("codex");
     const codexFailed = codexWasTargeted && !codexPluginAdded;
-    const succeeded =
-      errors.filter((e) => !e.startsWith("Optional command failed")).length ===
-        0 && !codexFailed;
+    const succeeded = errors.length === 0 && !codexFailed;
 
     if (!succeeded || context.dryRun) {
       return {

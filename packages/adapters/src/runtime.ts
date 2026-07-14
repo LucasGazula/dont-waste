@@ -302,9 +302,6 @@ export async function isCodexMarketplaceAvailable(
   if (process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE) {
     return process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE === "true";
   }
-  if (process.env.VITEST) {
-    return true;
-  }
   try {
     const codexPath = await findExecutable(
       "codex",

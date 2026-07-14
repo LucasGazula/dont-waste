@@ -61,61 +61,67 @@ describe("ponytail mode persistence", () => {
 
   it("preserves a rejected Codex marketplace without aborting other Ponytail steps", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
-    const adapter = new PonytailAdapter();
-    const context = {
-      platform: "linux" as const,
-      home,
-      selectedAgents: ["codex" as const],
-      dryRun: false,
-    };
-    const plan = await adapter.planInstall(
-      { mode: "full" as const, features: {} },
-      context,
-    );
+    try {
+      const adapter = new PonytailAdapter();
+      const context = {
+        platform: "linux" as const,
+        home,
+        selectedAgents: ["codex" as const],
+        dryRun: false,
+      };
+      const plan = await adapter.planInstall(
+        { mode: "full" as const, features: {} },
+        context,
+      );
 
-    expect(plan.commands[0]).toMatchObject({
-      label: "Add Ponytail marketplace to Codex",
-    });
+      expect(plan.commands[0]).toMatchObject({
+        label: "Add Ponytail marketplace to Codex",
+      });
 
-    const started: string[] = [];
-    const result = await adapter.install(
-      {
-        ...plan,
-        commands: [
-          {
-            ...plan.commands[0],
-            command: process.execPath,
-            args: ["-e", "process.exit(1)"],
-          },
-          ...plan.commands.slice(1, 2).map((command) => ({
-            ...command,
-            command: process.execPath,
-            args: ["-e", "process.exit(0)"],
-            interactive: false,
-          })),
-          ...plan.commands.slice(2),
-        ],
-      },
-      {
-        ...context,
-        beforeCommand: (command) => {
-          started.push(command.label);
+      process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = "true";
+
+      const started: string[] = [];
+      const result = await adapter.install(
+        {
+          ...plan,
+          commands: [
+            {
+              ...plan.commands[0],
+              command: process.execPath,
+              args: ["-e", "process.exit(1)"],
+            },
+            ...plan.commands.slice(1, 2).map((command) => ({
+              ...command,
+              command: process.execPath,
+              args: ["-e", "process.exit(0)"],
+              interactive: false,
+            })),
+            ...plan.commands.slice(2),
+          ],
         },
-      },
-    );
+        {
+          ...context,
+          beforeCommand: (command) => {
+            started.push(command.label);
+          },
+        },
+      );
 
-    expect(result.succeeded).toBe(true);
-    expect(result.errors).toEqual([]);
-    expect(result.executed).toHaveLength(2);
-    expect(result.skipped.map((command) => command.label)).toEqual([
-      "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
-    ]);
-    expect(started).toEqual([
-      "Add Ponytail marketplace to Codex",
-      "Install Ponytail plugin in Codex",
-      "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
-    ]);
-    await rm(home, { recursive: true, force: true });
+      expect(result.succeeded).toBe(true);
+      expect(result.errors).toEqual([]);
+      expect(result.executed).toHaveLength(2);
+      expect(result.skipped.map((command) => command.label)).toEqual([
+        "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
+      ]);
+      expect(started).toEqual([
+        "Add Ponytail marketplace to Codex",
+        "Install Ponytail plugin in Codex",
+        "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
+      ]);
+    } finally {
+      delete process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it("uses Ponytail's official non-interactive Codex plugin command", async () => {

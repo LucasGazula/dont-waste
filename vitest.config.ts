@@ -1,6 +1,8 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
 
+delete process.env.CODEX_HOME;
+
 export default defineConfig({
   resolve: {
     alias: {
