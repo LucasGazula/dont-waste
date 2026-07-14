@@ -36,13 +36,18 @@ describe("caveman adapter planning", () => {
       },
     );
 
-    expect(plan.commands).toHaveLength(1);
+    expect(plan.commands).toHaveLength(2);
     expect(plan.commands[0]?.args).toEqual(
       expect.arrayContaining(["--only", "codex"]),
     );
     expect(plan.commands[0]?.args).not.toEqual(
       expect.arrayContaining(["--only", "claude"]),
     );
+    expect(plan.commands[1]).toMatchObject({
+      command: "claude",
+      args: ["plugin", "enable", "caveman@caveman", "--scope", "project"],
+      optional: true,
+    });
     await rm(home, { recursive: true, force: true });
   });
 
@@ -169,6 +174,29 @@ describe("caveman adapter planning", () => {
       },
     );
     expect(checks.find((c) => c.id === "caveman-node")).toBeDefined();
+  });
+
+  it("reports whether the Claude Code Caveman plugin is enabled", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
+    await mkdir(path.join(home, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "caveman@caveman": true } }),
+      "utf8",
+    );
+    const checks = await new CavemanAdapter().verify(
+      { mode: "full", features: {} },
+      {
+        platform: "linux",
+        home,
+        selectedAgents: ["claude-code"],
+        dryRun: true,
+      },
+    );
+    expect(
+      checks.find((check) => check.id === "caveman-claude-plugin"),
+    ).toMatchObject({ status: "pass" });
+    await rm(home, { recursive: true, force: true });
   });
 
   it("links the global Caveman skill into CODEX_HOME and verifies it", async () => {
@@ -322,7 +350,7 @@ describe("caveman adapter planning", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("rejects a wrong Codex skill symlink even when it contains SKILL.md", async () => {
+  it("preserves a valid external Codex skill symlink", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-caveman-"));
     const codexHome = path.join(home, "codex-home");
     const previousCodexHome = process.env.CODEX_HOME;
@@ -353,12 +381,12 @@ describe("caveman adapter planning", () => {
       const plan = await adapter.planInstall(selection, context);
       const result = await adapter.install({ ...plan, commands: [] }, context);
 
-      expect(result.succeeded).toBe(false);
+      expect(result.succeeded).toBe(true);
       expect(await readlink(targetDir)).toBe(wrongSkillDir);
       const checks = await adapter.verify(selection, context);
       expect(
         checks.find((check) => check.id === "caveman-codex-skill"),
-      ).toMatchObject({ status: "fail" });
+      ).toMatchObject({ status: "pass" });
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;

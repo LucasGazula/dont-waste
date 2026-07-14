@@ -935,26 +935,38 @@ async function runDoctor(options: CommonOptions): Promise<void> {
   const checks = [];
   for (const tool of toolIds) {
     const entry = configured.find((item) => item.tool === tool);
-    if (!entry) {
+    const adapter = adapters[tool];
+    const detectionCtx = context([], true);
+    const detection = await adapter.detect(detectionCtx);
+
+    if (!entry && !detection.detected) {
       checks.push({
         tool,
         status: "skipped",
-        reason: "not enabled in Don’t Waste config",
+        reason: "not enabled in Don’t Waste config and not natively detected",
         checks: [],
       });
       continue;
     }
-    const toolChecks = await adapters[tool].verify(
-      entry.selection,
-      context(entry.agents, true),
+
+    const agentsToVerify = entry
+      ? entry.agents
+      : agents.map((a) => a.id).filter((agent) => adapter.getCapabilities(agent).length > 0);
+    const selection = entry
+      ? entry.selection
+      : { mode: "full" as const, features: {} };
+
+    const toolChecks = await adapter.verify(
+      selection,
+      context(agentsToVerify, true),
     );
     const failed = toolChecks.some((check) => check.status === "fail");
     const warned = toolChecks.some((check) => check.status === "warn");
     checks.push({
       tool,
       status: failed ? "fail" : warned ? "warn" : "pass",
-      selection: entry.selection,
-      agents: entry.agents,
+      selection,
+      agents: agentsToVerify,
       checks: toolChecks,
     });
   }

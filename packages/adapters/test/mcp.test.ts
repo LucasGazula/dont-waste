@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   antigravityMcpConfigPath,
+  claudeMcpConfigPath,
   codexConfigPath,
   copilotMcpConfigPath,
   readMcpServer,
@@ -84,6 +85,12 @@ describe("mcp registration", () => {
     }
   });
 
+  it("uses Claude Code's current user MCP registry", () => {
+    expect(claudeMcpConfigPath({ home: "/tmp/home" })).toBe(
+      "/tmp/home/.claude.json",
+    );
+  });
+
   it("writes codex configuration with comments and markers", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
     const spec = headroomMcpSpec("/usr/local/bin/headroom");
@@ -128,6 +135,50 @@ describe("mcp registration", () => {
     expect(content).not.toContain("/old/headroom");
   });
 
+  it("repairs an otherwise-empty interrupted Codex marker", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const file = path.join(home, ".codex", "config.toml");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      'model = "gpt-5"\n\n# --- Headroom MCP server ---\n',
+      "utf8",
+    );
+
+    const result = await registerHeadroomMcp(
+      "codex",
+      headroomMcpSpec("/opt/headroom"),
+      { home, platform: "linux" },
+    );
+
+    expect(result).toMatchObject({ status: "registered" });
+    const content = await readFile(file, "utf8");
+    expect(content).toContain("[mcp_servers.headroom]");
+    expect(content).toContain("# --- end Headroom MCP server ---");
+    expect(content.match(/# --- Headroom MCP server ---/g)).toHaveLength(1);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("accepts a matching Codex server when another CLI left an orphan marker", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const file = path.join(home, ".codex", "config.toml");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      `[mcp_servers.headroom]\ncommand = "/opt/headroom"\nargs = ["mcp", "serve"]\n# --- end Headroom MCP server ---\n`,
+      "utf8",
+    );
+
+    const result = await registerHeadroomMcp(
+      "codex",
+      headroomMcpSpec("/opt/headroom"),
+      { home, platform: "linux" },
+    );
+
+    expect(result).toMatchObject({ status: "already" });
+    await rm(home, { recursive: true, force: true });
+  });
+
   it("refuses to overwrite user-defined codex server without markers", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
     await mkdir(path.join(home, ".codex"), { recursive: true });
@@ -152,12 +203,11 @@ describe("mcp registration", () => {
 
   it("merges JSON MCP configurations without replacing unrelated keys", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
-    await mkdir(path.join(home, ".claude"), { recursive: true });
     await mkdir(path.join(home, ".copilot"), { recursive: true });
     await mkdir(path.join(home, ".gemini", "config"), { recursive: true });
     await mkdir(path.join(home, ".config", "opencode"), { recursive: true });
     await writeFile(
-      path.join(home, ".claude", "mcp.json"),
+      claudeMcpConfigPath({ home }),
       JSON.stringify({ mcpServers: { other: { command: "x" } } }, null, 2),
       "utf8",
     );
@@ -193,10 +243,11 @@ describe("mcp registration", () => {
     ).toBe("registered");
 
     const claude = JSON.parse(
-      await readFile(path.join(home, ".claude", "mcp.json"), "utf8"),
+      await readFile(claudeMcpConfigPath({ home }), "utf8"),
     ) as { mcpServers: Record<string, unknown> };
     expect(claude.mcpServers.other).toEqual({ command: "x" });
     expect(claude.mcpServers.headroom).toEqual({
+      type: "stdio",
       command: "/opt/headroom",
       args: ["mcp", "serve"],
     });
@@ -300,5 +351,28 @@ describe("mcp registration", () => {
     expect(
       (await unregisterHeadroomMcp("antigravity-cli", context)).status,
     ).toBe("preserved");
+  });
+
+  it("blocks registration and unregistration when active Codex processes are detected", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const context = { home, platform: "linux" as const };
+    const spec = headroomMcpSpec("/opt/headroom");
+
+    process.env.DONT_WASTE_MOCK_CODEX_PROCESSES = JSON.stringify([
+      { pid: 12345, cmdline: "node codex" },
+    ]);
+
+    try {
+      const regResult = await registerHeadroomMcp("codex", spec, context);
+      expect(regResult.status).toBe("failed");
+      expect(regResult.detail).toContain("12345");
+
+      const unregResult = await unregisterHeadroomMcp("codex", context);
+      expect(unregResult.status).toBe("failed");
+      expect(unregResult.detail).toContain("12345");
+    } finally {
+      delete process.env.DONT_WASTE_MOCK_CODEX_PROCESSES;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

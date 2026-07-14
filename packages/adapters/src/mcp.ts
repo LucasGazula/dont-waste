@@ -1,7 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentId } from "@dont-waste/catalog";
 import { headroomFeatureEnv } from "./advanced-controls.js";
+import { getActiveCodexProcesses } from "./runtime.js";
 import type { AdapterContext } from "./types.js";
 
 export type McpServerSpec = {
@@ -25,6 +27,19 @@ const MARKER_START = "# --- Headroom MCP server ---";
 const MARKER_END = "# --- end Headroom MCP server ---";
 
 type McpOwnership = Partial<Record<AgentId, McpServerSpec>>;
+
+/** Prevent an interrupted setup from leaving a half-written host config. */
+async function writeAtomically(file: string, content: string): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, content, "utf8");
+    await rename(temporary, file);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
 
 function specsMatch(
   existing: McpServerSpec,
@@ -108,7 +123,7 @@ export function codexConfigPath(context: Pick<AdapterContext, "home">): string {
 export function claudeMcpConfigPath(
   context: Pick<AdapterContext, "home">,
 ): string {
-  return path.join(context.home, ".claude", "mcp.json");
+  return path.join(context.home, ".claude.json");
 }
 
 export function copilotMcpConfigPath(
@@ -156,8 +171,7 @@ async function recordMcpOwnership(
   const ownership = await readMcpOwnership(context);
   ownership[agent] = spec;
   const file = mcpOwnershipPath(context);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
+  await writeAtomically(file, `${JSON.stringify(ownership, null, 2)}\n`);
 }
 
 async function removeMcpOwnership(
@@ -167,8 +181,7 @@ async function removeMcpOwnership(
   const ownership = await readMcpOwnership(context);
   delete ownership[agent];
   const file = mcpOwnershipPath(context);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
+  await writeAtomically(file, `${JSON.stringify(ownership, null, 2)}\n`);
 }
 
 export function opencodeConfigPath(
@@ -265,14 +278,54 @@ export async function readMcpServer(
 
 async function registerCodex(
   spec: McpServerSpec,
-  context: Pick<AdapterContext, "home">,
+  context: Pick<AdapterContext, "home" | "platform">,
 ): Promise<McpRegisterResult> {
   const file = codexConfigPath(context);
-  const existing = await readMcpServer(
-    "codex",
-    { ...context, platform: "linux" },
-    spec.name,
-  );
+  const activeProcesses = await getActiveCodexProcesses(context);
+  if (activeProcesses.length > 0) {
+    const pids = activeProcesses.map((p) => p.pid).join(", ");
+    return {
+      agent: "codex",
+      status: "failed",
+      path: file,
+      detail: `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Deferring registration to avoid overwrite on exit.`,
+    };
+  }
+  let content = "";
+  try {
+    content = await readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const hasStart = content.includes(MARKER_START);
+  const hasEnd = content.includes(MARKER_END);
+  const start = content.indexOf(MARKER_START);
+  const block = renderCodexBlock(spec);
+
+  // Only repair a marker that was interrupted before any configuration was
+  // emitted. A non-empty fragment can contain user data and remains intact.
+  if (hasStart && !hasEnd) {
+    const fragment = content.slice(start + MARKER_START.length);
+    if (fragment.trim()) {
+      return {
+        agent: "codex",
+        status: "mismatch",
+        path: file,
+        detail: "incomplete Headroom marker block has content; left untouched",
+      };
+    }
+    await writeAtomically(
+      file,
+      `${content.slice(0, start).replace(/\n*$/, "")}\n\n${block}\n`,
+    );
+    return {
+      agent: "codex",
+      status: "registered",
+      path: file,
+      detail: `repaired incomplete marker block in ${file}`,
+    };
+  }
+  const existing = parseCodexServer(content, spec.name);
   if (existing && specsMatch(existing, spec)) {
     return {
       agent: "codex",
@@ -281,11 +334,13 @@ async function registerCodex(
       detail: "matches current configuration",
     };
   }
-  let content = "";
-  try {
-    content = await readFile(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  if (!hasStart && hasEnd) {
+    return {
+      agent: "codex",
+      status: "mismatch",
+      path: file,
+      detail: "orphaned Headroom end marker; left untouched",
+    };
   }
   if (existing && !content.includes(MARKER_START)) {
     return {
@@ -296,17 +351,14 @@ async function registerCodex(
         "user-managed [mcp_servers.headroom] entry outside Headroom markers; left untouched",
     };
   }
-  const block = renderCodexBlock(spec);
   let next: string;
-  if (content.includes(MARKER_START) && content.includes(MARKER_END)) {
-    const start = content.indexOf(MARKER_START);
+  if (hasStart && hasEnd) {
     const end = content.indexOf(MARKER_END) + MARKER_END.length;
     next = `${content.slice(0, start).replace(/\n*$/, "")}\n\n${block}\n${content.slice(end).replace(/^\n*/, "")}`;
   } else if (content.trim())
     next = `${content.replace(/\n*$/, "")}\n\n${block}\n`;
   else next = `${block}\n`;
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, next, "utf8");
+  await writeAtomically(file, next);
   return {
     agent: "codex",
     status: "registered",
@@ -380,14 +432,13 @@ async function registerMcpServersJson(
       ? { ...(current.mcpServers as Record<string, unknown>) }
       : {};
   const entry: Record<string, unknown> = { command: spec.command };
+  if (agent === "claude-code") entry.type = "stdio";
   if (spec.args.length) entry.args = spec.args;
   if (spec.env && Object.keys(spec.env).length) entry.env = spec.env;
   servers[spec.name] = entry;
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(
+  await writeAtomically(
     file,
     `${JSON.stringify({ ...current, mcpServers: servers }, null, 2)}\n`,
-    "utf8",
   );
   return {
     agent,
@@ -440,11 +491,9 @@ async function registerOpencode(
   };
   if (spec.env && Object.keys(spec.env).length) entry.environment = spec.env;
   mcp[spec.name] = entry;
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(
+  await writeAtomically(
     file,
     `${JSON.stringify({ ...current, mcp }, null, 2)}\n`,
-    "utf8",
   );
   return {
     agent: "opencode",
@@ -499,9 +548,19 @@ export type McpUnregisterResult = {
 };
 
 async function unregisterCodex(
-  context: Pick<AdapterContext, "home">,
+  context: Pick<AdapterContext, "home" | "platform">,
 ): Promise<McpUnregisterResult> {
   const file = codexConfigPath(context);
+  const activeProcesses = await getActiveCodexProcesses(context);
+  if (activeProcesses.length > 0) {
+    const pids = activeProcesses.map((p) => p.pid).join(", ");
+    return {
+      agent: "codex",
+      status: "failed",
+      path: file,
+      detail: `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Deferring registration to avoid overwrite on exit.`,
+    };
+  }
   let content = "";
   try {
     content = await readFile(file, "utf8");
@@ -530,7 +589,7 @@ async function unregisterCodex(
       /\n{3,}/g,
       "\n\n",
     );
-  await writeFile(file, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+  await writeAtomically(file, next.endsWith("\n") ? next : `${next}\n`);
   return {
     agent: "codex",
     status: "removed",
@@ -593,10 +652,9 @@ async function unregisterMcpServersJson(
         "headroom entry is not recorded as Don’t Waste-owned; left untouched",
     };
   delete servers.headroom;
-  await writeFile(
+  await writeAtomically(
     file,
     `${JSON.stringify({ ...current, mcpServers: servers }, null, 2)}\n`,
-    "utf8",
   );
   await removeMcpOwnership(agent, context);
   return {
@@ -640,10 +698,9 @@ async function unregisterOpencode(
       detail: "no headroom entry",
     };
   delete mcp.headroom;
-  await writeFile(
+  await writeAtomically(
     file,
     `${JSON.stringify({ ...current, mcp }, null, 2)}\n`,
-    "utf8",
   );
   return {
     agent: "opencode",

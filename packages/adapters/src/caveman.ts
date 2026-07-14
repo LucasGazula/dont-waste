@@ -12,8 +12,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { AgentId, Mode } from "@dont-waste/catalog";
 import { importCavemanStats } from "@dont-waste/telemetry";
+import { getAgentPaths } from "./agents.js";
 import { BaseAdapter } from "./base.js";
-import { findExecutable } from "./runtime.js";
+import { findExecutable, getCodexRuntimeDiagnostic } from "./runtime.js";
 import type {
   AdapterContext,
   DetectionResult,
@@ -102,7 +103,7 @@ function cavemanSkillTargetDir(
   return skillPath ? path.dirname(skillPath) : undefined;
 }
 
-type CavemanSkillLinkState = "missing" | "canonical" | "conflict";
+type CavemanSkillLinkState = "missing" | "canonical" | "external" | "conflict";
 
 async function cavemanSkillLinkState(
   agent: AgentId,
@@ -115,9 +116,14 @@ async function cavemanSkillLinkState(
     if (!target.isSymbolicLink()) return "conflict";
     const link = await readlink(targetDir);
     const resolvedLink = path.resolve(path.dirname(targetDir), link);
-    return resolvedLink === path.resolve(cavemanGlobalSkillDir(context))
-      ? "canonical"
-      : "conflict";
+    if (resolvedLink === path.resolve(cavemanGlobalSkillDir(context)))
+      return "canonical";
+    try {
+      await access(path.join(resolvedLink, "SKILL.md"));
+      return "external";
+    } catch {
+      return "conflict";
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
     return "conflict";
@@ -128,8 +134,8 @@ async function hasCanonicalCavemanSkillLink(
   agent: AgentId,
   context: Pick<AdapterContext, "home">,
 ): Promise<boolean> {
-  if ((await cavemanSkillLinkState(agent, context)) !== "canonical")
-    return false;
+  const state = await cavemanSkillLinkState(agent, context);
+  if (state !== "canonical" && state !== "external") return false;
   try {
     await access(path.join(cavemanGlobalSkillDir(context), "SKILL.md"));
     return true;
@@ -219,6 +225,18 @@ function cavemanMarkerPath(
   return undefined;
 }
 
+function claudeProjectSettingsPath(): string {
+  let current = process.cwd();
+  for (;;) {
+    const candidate = path.join(current, ".claude", "settings.json");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current)
+      return path.join(process.cwd(), ".claude", "settings.json");
+    current = parent;
+  }
+}
+
 async function cavemanAgentInstalled(
   agent: AgentId,
   context: Pick<AdapterContext, "home">,
@@ -247,6 +265,26 @@ function installArgs(context: AdapterContext): string[] {
   }
   args.push("--non-interactive");
   return args;
+}
+
+async function claudeCavemanEnabled(
+  context: Pick<AdapterContext, "home" | "platform">,
+): Promise<boolean> {
+  const files = [
+    getAgentPaths("claude-code", context)[0],
+    claudeProjectSettingsPath(),
+  ].filter((file): file is string => Boolean(file));
+  for (const file of files) {
+    try {
+      const config = JSON.parse(await readFile(file, "utf8")) as {
+        enabledPlugins?: Record<string, unknown>;
+      };
+      if (config.enabledPlugins?.["caveman@caveman"] === true) return true;
+    } catch {
+      // Continue to the other supported scope.
+    }
+  }
+  return false;
 }
 
 export class CavemanAdapter extends BaseAdapter {
@@ -318,6 +356,9 @@ export class CavemanAdapter extends BaseAdapter {
           affectedPaths.push(path.dirname(targetDir), targetDir);
         }
       }
+      if (context.selectedAgents.includes("claude-code")) {
+        affectedPaths.push(claudeProjectSettingsPath());
+      }
     }
     const installTargets = (
       await Promise.all(
@@ -328,18 +369,36 @@ export class CavemanAdapter extends BaseAdapter {
           ),
       )
     ).filter((agent): agent is AgentId => Boolean(agent));
-    const commands = installTargets.length
-      ? [
-          {
-            command: "npx",
-            args: installArgs({ ...context, selectedAgents: installTargets }),
-            label: "Run the official Caveman installer for selected agents",
-            env: { CI: "true" },
-            timeoutMs: 180_000,
-            forceKillAfterDelay: 5_000,
-          },
-        ]
-      : [];
+    const commands = [
+      ...(installTargets.length
+        ? [
+            {
+              command: "npx",
+              args: installArgs({ ...context, selectedAgents: installTargets }),
+              label: "Run the official Caveman installer for selected agents",
+              env: { CI: "true" },
+              timeoutMs: 180_000,
+              forceKillAfterDelay: 5_000,
+            },
+          ]
+        : []),
+      ...(context.selectedAgents.includes("claude-code")
+        ? [
+            {
+              command: "claude",
+              args: [
+                "plugin",
+                "enable",
+                "caveman@caveman",
+                "--scope",
+                "project",
+              ],
+              label: "Enable Caveman plugin in Claude Code",
+              optional: true,
+            },
+          ]
+        : []),
+    ];
     const supportedSelected = context.selectedAgents.filter(
       (agent) => cavemanOnlyId[agent],
     );
@@ -458,10 +517,28 @@ export class CavemanAdapter extends BaseAdapter {
     const expected = resolveCavemanMode(selection.mode);
     const modeFiles = cavemanActivePaths(context);
     if (context.selectedAgents.includes("codex")) {
+      checks.push(await getCodexRuntimeDiagnostic(context));
       checks.push(await cavemanSkillHealthCheck("codex", context));
     }
     if (context.selectedAgents.includes("antigravity-cli")) {
       checks.push(await cavemanSkillHealthCheck("antigravity-cli", context));
+    }
+    if (context.selectedAgents.includes("claude-code")) {
+      checks.push(
+        (await claudeCavemanEnabled(context))
+          ? {
+              id: "caveman-claude-plugin",
+              status: "pass",
+              message: "Caveman plugin is enabled in Claude Code",
+            }
+          : {
+              id: "caveman-claude-plugin",
+              status: "fail",
+              message: "Caveman plugin is not enabled in Claude Code",
+              remediation:
+                "Run claude plugin enable caveman@caveman --scope project, then start a new Claude Code session.",
+            },
+      );
     }
     if (
       !modeFiles.length &&
@@ -671,7 +748,7 @@ async function ensureSkillLinked(
   }
 
   const state = await cavemanSkillLinkState(agent, context);
-  if (state === "canonical") return undefined;
+  if (state === "canonical" || state === "external") return undefined;
   if (state === "conflict") return cavemanSkillConflictMessage(agent, context);
 
   try {
@@ -692,16 +769,26 @@ async function cavemanSkillHealthCheck(
       ? cavemanCodexSkillPath(context)
       : cavemanAntigravitySkillPath(context);
   const label = agent === "codex" ? "Codex" : "Antigravity";
-  return (await hasCanonicalCavemanSkillLink(agent, context))
+  const state = await cavemanSkillLinkState(agent, context);
+  const isPass = await hasCanonicalCavemanSkillLink(agent, context);
+  
+  const mcpExplanatoryNote = agent === "codex"
+    ? ". Note: Caveman is a Codex skill and does not register as an MCP server; checking '/mcp' inside Codex will NOT show Caveman. Instead, run '/caveman' in a Codex session to activate/verify it."
+    : ". Note: Caveman is an Antigravity skill and does not register as an MCP server.";
+
+  return isPass
     ? {
         id: `caveman-${agent === "codex" ? "codex" : "antigravity"}-skill`,
         status: "pass",
-        message: `${label} Caveman skill is linked to the canonical global skill at ${file}`,
+        message:
+          (state === "canonical"
+            ? `${label} Caveman skill is linked to the canonical global skill at ${file}`
+            : `${label} Caveman skill is linked to a valid external skill source at ${file}`) + mcpExplanatoryNote,
       }
     : {
         id: `caveman-${agent === "codex" ? "codex" : "antigravity"}-skill`,
         status: "fail",
-        message: `${label} Caveman skill is not linked to the canonical global skill at ${file}`,
+        message: `${label} Caveman skill is not linked to the canonical global skill at ${file}` + mcpExplanatoryNote,
         remediation:
           "Preserve the existing skill target, resolve the conflict, then rerun dont-waste init and start a new session.",
       };

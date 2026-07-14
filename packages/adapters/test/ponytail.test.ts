@@ -59,7 +59,7 @@ describe("ponytail mode persistence", () => {
     expect(checks.find((c) => c.id === "ponytail-node")).toBeDefined();
   });
 
-  it("stops before plugin install when Codex marketplace registration is rejected", async () => {
+  it("preserves a rejected Codex marketplace without aborting other Ponytail steps", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
     const adapter = new PonytailAdapter();
     const context = {
@@ -104,16 +104,17 @@ describe("ponytail mode persistence", () => {
       },
     );
 
-    expect(result.succeeded).toBe(false);
-    expect(result.errors).toEqual([
-      "Add Ponytail marketplace to Codex exited with 1",
-    ]);
-    expect(result.executed).toHaveLength(1);
+    expect(result.succeeded).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.executed).toHaveLength(2);
     expect(result.skipped.map((command) => command.label)).toEqual([
+      "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
+    ]);
+    expect(started).toEqual([
+      "Add Ponytail marketplace to Codex",
       "Install Ponytail plugin in Codex",
       "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
     ]);
-    expect(started).toEqual(["Add Ponytail marketplace to Codex"]);
     await rm(home, { recursive: true, force: true });
   });
 
@@ -147,7 +148,7 @@ describe("ponytail mode persistence", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("does not rerun marketplace-dependent Codex commands for an existing Ponytail install", async () => {
+  it("does not let global Ponytail state suppress a different host's install", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
     await mkdir(path.join(home, ".config", "ponytail"), { recursive: true });
     await writeFile(
@@ -161,31 +162,99 @@ describe("ponytail mode persistence", () => {
       {
         platform: "linux" as const,
         home,
-        selectedAgents: ["codex" as const],
+        selectedAgents: ["claude-code" as const, "codex" as const],
         dryRun: false,
       },
     );
 
-    expect(plan.commands.some((command) => isMarketplaceCommand(command))).toBe(
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        command: "codex",
+        args: ["plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+      }),
+    );
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        command: "codex",
+        args: ["plugin", "add", "ponytail@ponytail"],
+      }),
+    );
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        command: "claude",
+        args: ["plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+      }),
+    );
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("skips only the Claude commands when Claude has Ponytail enabled", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    await mkdir(path.join(home, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "ponytail@ponytail": true } }),
+      "utf8",
+    );
+
+    const plan = await new PonytailAdapter().planInstall(
+      { mode: "full" as const, features: {} },
+      {
+        platform: "linux" as const,
+        home,
+        selectedAgents: ["claude-code" as const, "codex" as const],
+        dryRun: false,
+      },
+    );
+
+    expect(plan.commands.some((command) => command.command === "claude")).toBe(
       false,
     );
-    expect(plan.commands).not.toContainEqual(
+    expect(plan.commands).toContainEqual(
       expect.objectContaining({
         command: "codex",
         args: ["plugin", "add", "ponytail@ponytail"],
       }),
     );
     expect(plan.warnings).toContain(
-      "Existing Ponytail install detected; marketplace registration and dependent plugin installation are skipped while existing sources are preserved.",
+      "Ponytail is already configured for claude-code; only those hosts skip marketplace-dependent commands.",
     );
     await rm(home, { recursive: true, force: true });
   });
-});
 
-function isMarketplaceCommand(command: { args: string[] }): boolean {
-  return (
-    command.args[0] === "plugin" &&
-    command.args[1] === "marketplace" &&
-    command.args[2] === "add"
-  );
-}
+  it("reports a conflict when a stale hidden Ponytail marketplace exists without registration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    const codexHome = path.join(home, "codex-home");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = "false";
+
+    try {
+      const staleDir = path.join(codexHome, ".tmp", "marketplaces", "ponytail");
+      await mkdir(staleDir, { recursive: true });
+
+      const checks = await new PonytailAdapter().verify(
+        { mode: "full", features: {} },
+        {
+          platform: "linux",
+          home,
+          selectedAgents: ["codex"],
+          dryRun: true,
+        },
+      );
+
+      const conflictCheck = checks.find(
+        (c) => c.id === "ponytail-codex-marketplace-conflict",
+      );
+      expect(conflictCheck).toBeDefined();
+      expect(conflictCheck?.status).toBe("fail");
+      expect(conflictCheck?.message).toContain("Stale hidden Ponytail marketplace detected");
+      expect(conflictCheck?.remediation).toContain("mv ");
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      delete process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});

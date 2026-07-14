@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentId, Mode } from "@dont-waste/catalog";
 import { getAgentPaths, ponytailConfigPath } from "./agents.js";
 import { BaseAdapter } from "./base.js";
-import { findExecutable } from "./runtime.js";
+import { findExecutable, getActiveCodexProcesses, getCodexRuntimeDiagnostic, isCodexMarketplaceAvailable, directoryExists } from "./runtime.js";
 import type {
   AdapterContext,
   Command,
@@ -37,11 +37,13 @@ function commandsFor(agent: AgentId): Command[] {
         command: "codex",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Codex",
+        optional: true,
       },
       {
         command: "codex",
         args: ["plugin", "add", "ponytail@ponytail"],
         label: "Install Ponytail plugin in Codex",
+        optional: true,
       },
       {
         command: "codex",
@@ -57,11 +59,13 @@ function commandsFor(agent: AgentId): Command[] {
         command: "claude",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Claude Code",
+        optional: true,
       },
       {
         command: "claude",
         args: ["plugin", "install", "ponytail@ponytail"],
         label: "Install Ponytail in Claude Code",
+        optional: true,
       },
     ];
   if (agent === "copilot-cli")
@@ -70,11 +74,13 @@ function commandsFor(agent: AgentId): Command[] {
         command: "copilot",
         args: ["plugin", "marketplace", "add", repository],
         label: "Add Ponytail marketplace to Copilot CLI",
+        optional: true,
       },
       {
         command: "copilot",
         args: ["plugin", "install", "ponytail@ponytail"],
         label: "Install Ponytail in Copilot CLI",
+        optional: true,
       },
     ];
 
@@ -182,6 +188,53 @@ async function updateJson(
   );
 }
 
+/**
+ * A Ponytail config is shared state, not proof that every selected host has
+ * loaded its native plugin.  Only skip a host's install commands when that
+ * host's own configuration says the plugin is enabled.
+ */
+async function ponytailInstalledForAgent(
+  agent: AgentId,
+  context: Pick<AdapterContext, "home" | "platform">,
+): Promise<boolean> {
+  try {
+    if (agent === "claude-code") {
+      const file = getAgentPaths(agent, context)[0];
+      if (!file) return false;
+      const config = JSON.parse(await readFile(file, "utf8")) as {
+        enabledPlugins?: Record<string, unknown>;
+      };
+      return config.enabledPlugins?.["ponytail@ponytail"] === true;
+    }
+    if (agent === "codex") {
+      const file = getAgentPaths(agent, context)[0];
+      if (!file) return false;
+      const config = await readFile(file, "utf8");
+      const section = config.match(
+        /\[plugins\."ponytail@ponytail"\]([\s\S]*?)(?=\n\[|$)/,
+      );
+      return Boolean(
+        section && !/^\s*enabled\s*=\s*false\s*$/m.test(section[1] ?? ""),
+      );
+    }
+    if (agent === "opencode") {
+      const file = getAgentPaths(agent, context)[0];
+      if (!file) return false;
+      const config = JSON.parse(await readFile(file, "utf8")) as {
+        plugin?: unknown;
+      };
+      return (
+        Array.isArray(config.plugin) &&
+        config.plugin.includes("@dietrichgebert/ponytail")
+      );
+    }
+  } catch {
+    // A missing or unreadable host config means we have no evidence of an
+    // installation, so keep the host's installer command in the plan.
+  }
+  return false;
+}
+
 export class PonytailAdapter extends BaseAdapter {
   readonly id = "ponytail" as const;
 
@@ -232,10 +285,49 @@ export class PonytailAdapter extends BaseAdapter {
     selection: ToolSelection,
     context: AdapterContext,
   ): Promise<OperationPlan> {
-    const detected = await this.detect(context);
+    const installedAgents = new Set(
+      (
+        await Promise.all(
+          context.selectedAgents.map(async (agent) =>
+            (await ponytailInstalledForAgent(agent, context))
+              ? agent
+              : undefined,
+          ),
+        )
+      ).filter((agent): agent is AgentId => Boolean(agent)),
+    );
+
+    const activeProcesses = context.selectedAgents.includes("codex")
+      ? await getActiveCodexProcesses(context)
+      : [];
+    const codexActive = activeProcesses.length > 0;
+    
+    const marketplaceAvailable = context.selectedAgents.includes("codex")
+      ? await isCodexMarketplaceAvailable(context)
+      : false;
+
+    const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+    const staleMarketplaceDir = path.join(codexHome, ".tmp", "marketplaces", "ponytail");
+    const staleDirExists = context.selectedAgents.includes("codex")
+      ? await directoryExists(staleMarketplaceDir)
+      : false;
+
+    const warnings: string[] = [];
+
     const commands = context.selectedAgents.flatMap((agent) => {
       const planned = commandsFor(agent);
-      return detected.detected
+      if (agent === "codex") {
+        if (codexActive) {
+          return [];
+        }
+        return planned.filter((cmd) => {
+          if (isMarketplaceDependentPlugin(cmd) && !marketplaceAvailable) {
+            return false;
+          }
+          return true;
+        });
+      }
+      return installedAgents.has(agent)
         ? planned.filter(
             (command) =>
               !isMarketplaceRegistration(command) &&
@@ -243,6 +335,26 @@ export class PonytailAdapter extends BaseAdapter {
           )
         : planned;
     });
+
+    if (context.selectedAgents.includes("codex")) {
+      if (codexActive) {
+        const pids = activeProcesses.map((p) => p.pid).join(", ");
+        warnings.push(
+          `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Codex Ponytail plugin installation is blocked/deferred.`,
+        );
+      } else if (!marketplaceAvailable) {
+        if (staleDirExists) {
+          warnings.push(
+            "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration. Plugin installation is deferred. Please resolve this conflict (see doctor checks).",
+          );
+        } else {
+          warnings.push(
+            "Codex Ponytail plugin installation is deferred because the ponytail marketplace is not registered.",
+          );
+        }
+      }
+    }
+
     const affectedPaths = context.selectedAgents.length
       ? [
           ponytailConfigPath(context),
@@ -268,10 +380,11 @@ export class PonytailAdapter extends BaseAdapter {
         context.selectedAgents.some((agent) =>
           ["codex", "claude-code", "copilot-cli"].includes(agent),
         )
-          ? detected.detected
-            ? "Existing Ponytail install detected; marketplace registration and dependent plugin installation are skipped while existing sources are preserved."
-            : "Ponytail marketplace registration preserves existing sources; a rejected registration stops dependent plugin installation for review."
+          ? installedAgents.size
+            ? `Ponytail is already configured for ${[...installedAgents].join(", ")}; only those hosts skip marketplace-dependent commands.`
+            : "Ponytail marketplace conflicts are preserved; failed host plugin commands remain visible in doctor and do not abort other hosts."
           : "",
+        ...warnings,
       ].filter(Boolean),
       affectedPaths,
     );
@@ -356,33 +469,95 @@ export class PonytailAdapter extends BaseAdapter {
         message: "Ponytail config.json is not readable yet",
       });
     }
-    if (context.selectedAgents.includes("opencode")) {
-      const file = getAgentPaths("opencode", context)[0];
-      try {
-        const config = file
-          ? (JSON.parse(await readFile(file, "utf8")) as { plugin?: unknown })
-          : {};
-        checks.push(
-          Array.isArray(config.plugin) &&
-            config.plugin.includes("@dietrichgebert/ponytail")
-            ? {
-                id: "ponytail-opencode",
-                status: "pass",
-                message: "OpenCode Ponytail plugin is configured",
-              }
-            : {
-                id: "ponytail-opencode",
-                status: "fail",
-                message: "OpenCode Ponytail plugin is missing",
-              },
-        );
-      } catch {
+
+    if (context.selectedAgents.includes("codex")) {
+      checks.push(await getCodexRuntimeDiagnostic(context));
+
+      const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+      const staleMarketplaceDir = path.join(codexHome, ".tmp", "marketplaces", "ponytail");
+      const staleDirExists = await directoryExists(staleMarketplaceDir);
+      const marketplaceAvailable = await isCodexMarketplaceAvailable(context);
+
+      const mcpExplanatoryNote = ". Note: Ponytail is a Codex plugin and does not register as an MCP server; checking '/mcp' inside Codex will NOT show Ponytail.";
+
+      // 1. Marketplace ownership / visibility check
+      if (staleDirExists && !marketplaceAvailable) {
         checks.push({
-          id: "ponytail-opencode",
-          status: "warn",
-          message: "OpenCode configuration is not readable yet",
+          id: "ponytail-codex-marketplace-conflict",
+          status: "fail",
+          message: "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration" + mcpExplanatoryNote,
+          remediation: `A conflicting user-owned ponytail marketplace directory exists but is not registered.
+To migrate:
+  1. Ensure all Codex processes are closed.
+  2. Run:
+     mv "${staleMarketplaceDir}" "${staleMarketplaceDir}.dont-waste-backup-\$(date +%Y%m%d-%H%M%S)"
+  3. Re-run 'dont-waste init' to register and install Ponytail.
+To reverse:
+  1. Close all Codex processes.
+  2. Run:
+     rm -rf "${staleMarketplaceDir}"
+     mv "${staleMarketplaceDir}.dont-waste-backup-<timestamp>" "${staleMarketplaceDir}"`,
+          blocksActivation: true,
+        });
+      } else {
+        checks.push({
+          id: "ponytail-codex-marketplace",
+          status: marketplaceAvailable ? "pass" : "fail",
+          message: (marketplaceAvailable
+            ? "Codex Ponytail marketplace is registered and visible"
+            : "Codex Ponytail marketplace is not registered") + mcpExplanatoryNote,
+          remediation: "Run 'dont-waste init' to register the Ponytail marketplace in Codex.",
         });
       }
+
+      // 2. Plugin installation check
+      const pluginInstalled = await ponytailInstalledForAgent("codex", context);
+      checks.push({
+        id: "ponytail-codex-plugin",
+        status: pluginInstalled ? "pass" : "fail",
+        message: (pluginInstalled
+          ? "Codex Ponytail plugin is installed and enabled"
+          : "Codex Ponytail plugin is not installed/enabled") + mcpExplanatoryNote,
+        remediation: "Ensure the Ponytail marketplace is registered, then run 'dont-waste init' to install the plugin.",
+      });
+
+      // 3. Hook approval check
+      checks.push({
+        id: "ponytail-codex-hooks-trust",
+        status: "warn",
+        message: "Codex Ponytail hook approval requires manual trust in the Codex /hooks screen" + mcpExplanatoryNote,
+        remediation: "Open Codex /hooks and trust the Ponytail plugin hooks.",
+        blocksActivation: false,
+      });
+
+      // 4. New-thread loading check
+      checks.push({
+        id: "ponytail-codex-new-thread",
+        status: "warn",
+        message: "Ponytail plugin loading requires starting a fresh conversation thread in Codex" + mcpExplanatoryNote,
+        remediation: "Start a new thread in Codex to load the Ponytail plugin.",
+        blocksActivation: false,
+      });
+    }
+
+    for (const agent of context.selectedAgents.filter((item) =>
+      ["claude-code", "opencode"].includes(item),
+    )) {
+      const label = agent === "claude-code" ? "Claude Code" : "OpenCode";
+      checks.push(
+        (await ponytailInstalledForAgent(agent, context))
+          ? {
+              id: `ponytail-${agent}`,
+              status: "pass",
+              message: `${label} Ponytail plugin is enabled`,
+            }
+          : {
+              id: `ponytail-${agent}`,
+              status: "fail",
+              message: `${label} Ponytail plugin is not enabled`,
+              remediation: "Install or enable Ponytail in this host, then start a new session.",
+            },
+      );
     }
     return checks;
   }
@@ -408,12 +583,27 @@ export class PonytailAdapter extends BaseAdapter {
   }
 
   async uninstall(context: AdapterContext): Promise<InstallResult> {
-    const commands = context.selectedAgents.flatMap(uninstallCommandsFor);
+    const activeProcesses = context.selectedAgents.includes("codex")
+      ? await getActiveCodexProcesses(context)
+      : [];
+    const codexActive = activeProcesses.length > 0;
+    const commands = context.selectedAgents.flatMap((agent) => {
+      if (agent === "codex" && codexActive) {
+        return [];
+      }
+      return uninstallCommandsFor(agent);
+    });
+    const planWarnings = [
+      "Marketplace/extension removals that lack a stable CLI remain manual.",
+      codexActive
+        ? `Active Codex processes detected targeting CODEX_HOME (PIDs: ${activeProcesses.map((p) => p.pid).join(", ")}). Codex Ponytail removal is blocked/deferred.`
+        : "",
+    ].filter(Boolean);
     const plan = this.basePlan(
       { mode: "off", features: {} },
       context,
       commands,
-      ["Marketplace/extension removals that lack a stable CLI remain manual."],
+      planWarnings,
     );
     const base = await super.install(plan, context);
     const errors = [...base.errors];

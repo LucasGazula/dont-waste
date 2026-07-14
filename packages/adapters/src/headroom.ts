@@ -17,7 +17,7 @@ import {
   unregisterHeadroomMcp,
   type McpRegisterResult,
 } from "./mcp.js";
-import { executableDetection, findExecutable } from "./runtime.js";
+import { executableDetection, findExecutable, getActiveCodexProcesses, getCodexRuntimeDiagnostic } from "./runtime.js";
 import type {
   AdapterContext,
   HealthCheck,
@@ -107,30 +107,42 @@ export class HeadroomAdapter extends BaseAdapter {
     const wrapOnly = context.selectedAgents.filter(
       (agent) => wrapName[agent] && !mcpAgents.includes(agent),
     );
+    const warnings = [
+      "Headroom wrap starts an interactive agent session and is intentionally not launched by the installer.",
+      "Headroom MCP (stdio: `headroom mcp serve`) is merged into Codex, Claude, Copilot, Antigravity, and OpenCode configs when absent; existing mismatched entries are never replaced.",
+      ...unsupportedMcp.map((agent) =>
+        agent === "pi"
+          ? "pi: Pi has no native MCP client; a dedicated bridge extension is required and is not installed automatically yet."
+          : `${agent}: no Headroom wrap wrapper or structured MCP registrar yet; skipped.`,
+      ),
+      ...wrapOnly.map(
+        (agent) =>
+          `${agent}: Headroom wrap is available; structured MCP registration is not supported for this agent yet.`,
+      ),
+      selection.features.outputShaper
+        ? "HEADROOM_OUTPUT_SHAPER=1 will be written into marker-owned Headroom MCP env (estimated savings without holdout)."
+        : "",
+      selection.features.ccrTtl
+        ? `HEADROOM_CCR_TTL_SECONDS=${HEADROOM_CCR_TTL_SECONDS_VALUE} will be written into marker-owned Headroom MCP env for longer CCR retention.`
+        : "",
+      ...pendingAdvancedControlNotes(["headroom"]),
+    ].filter(Boolean);
+
+    if (context.selectedAgents.includes("codex")) {
+      const activeProcesses = await getActiveCodexProcesses(context);
+      if (activeProcesses.length > 0) {
+        const pids = activeProcesses.map((p) => p.pid).join(", ");
+        warnings.push(
+          `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Codex Headroom MCP registration will be blocked/deferred.`,
+        );
+      }
+    }
+
     return this.basePlan(
       selection,
       context,
       commands,
-      [
-        "Headroom wrap starts an interactive agent session and is intentionally not launched by the installer.",
-        "Headroom MCP (stdio: `headroom mcp serve`) is merged into Codex, Claude, Copilot, Antigravity, and OpenCode configs when absent; existing mismatched entries are never replaced.",
-        ...unsupportedMcp.map((agent) =>
-          agent === "pi"
-            ? "pi: Pi has no native MCP client; a dedicated bridge extension is required and is not installed automatically yet."
-            : `${agent}: no Headroom wrap wrapper or structured MCP registrar yet; skipped.`,
-        ),
-        ...wrapOnly.map(
-          (agent) =>
-            `${agent}: Headroom wrap is available; structured MCP registration is not supported for this agent yet.`,
-        ),
-        selection.features.outputShaper
-          ? "HEADROOM_OUTPUT_SHAPER=1 will be written into marker-owned Headroom MCP env (estimated savings without holdout)."
-          : "",
-        selection.features.ccrTtl
-          ? `HEADROOM_CCR_TTL_SECONDS=${HEADROOM_CCR_TTL_SECONDS_VALUE} will be written into marker-owned Headroom MCP env for longer CCR retention.`
-          : "",
-        ...pendingAdvancedControlNotes(["headroom"]),
-      ].filter(Boolean),
+      warnings,
       [...new Set(affectedPaths)],
     );
   }
@@ -218,6 +230,10 @@ export class HeadroomAdapter extends BaseAdapter {
         blocksActivation: false,
       });
     }
+    if (context.selectedAgents.includes("codex")) {
+      checks.push(await getCodexRuntimeDiagnostic(context));
+    }
+
     const headroomPath =
       detection.path ??
       (await findExecutable("headroom", context.platform, context.abortSignal));
@@ -258,6 +274,18 @@ export class HeadroomAdapter extends BaseAdapter {
           message: envOk
             ? `Headroom MCP is configured for ${agent}`
             : `Headroom MCP for ${agent} is present but feature env differs (marker-owned Codex entries can be refreshed on init)`,
+        });
+
+        const activeProcesses = agent === "codex" ? await getActiveCodexProcesses(context) : [];
+        const pidsStr = activeProcesses.length > 0 ? activeProcesses.map((p) => p.pid).join(", ") : "none";
+        checks.push({
+          id: `headroom-mcp-${agent}-acceptance`,
+          status: "warn",
+          message: `Fresh-session acceptance test pending for ${agent}. A file configuration alone does not prove session load.`,
+          remediation: agent === "codex"
+            ? `Close all active Codex processes (PIDs: ${pidsStr}), open a fresh Codex session, and run '/mcp' to verify headroom tools.`
+            : `Open a fresh ${agent} session and verify headroom tools are available.`,
+          blocksActivation: false,
         });
       } else {
         checks.push({

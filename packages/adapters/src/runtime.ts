@@ -1,6 +1,8 @@
+import { readdir, readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
-import type { Command, DetectionResult, RunCommandHooks } from "./types.js";
+import type { Command, DetectionResult, RunCommandHooks, AdapterContext, HealthCheck } from "./types.js";
 
 /** Default bound for non-interactive upstream installers (avoids infinite prompt hangs). */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
@@ -160,4 +162,140 @@ export function commandHooksFromAdapterContext(context: {
     beforeCommand: context.beforeCommand,
     abortSignal: context.abortSignal,
   });
+}
+
+export async function directoryExists(filePath: string): Promise<boolean> {
+  try {
+    const info = await stat(filePath);
+    return info.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export async function getActiveCodexProcesses(
+  context: Pick<AdapterContext, "home" | "platform">,
+): Promise<{ pid: number; cmdline: string }[]> {
+  if (process.env.DONT_WASTE_MOCK_CODEX_PROCESSES) {
+    try {
+      return JSON.parse(process.env.DONT_WASTE_MOCK_CODEX_PROCESSES);
+    } catch {
+      return [];
+    }
+  }
+
+  if (process.env.VITEST) {
+    return [];
+  }
+
+  if (context.platform !== "linux" && process.platform !== "linux") {
+    return [];
+  }
+
+  const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+  const resolvedTarget = path.resolve(codexHome);
+  const active: { pid: number; cmdline: string }[] = [];
+
+  try {
+    const entries = await readdir("/proc");
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      const pid = parseInt(entry, 10);
+      try {
+        const cmdline = await readFile(path.join("/proc", entry, "cmdline"), "utf8");
+        const lowerCmd = cmdline.toLowerCase();
+        if (!lowerCmd.includes("codex") && !lowerCmd.includes("node")) {
+          continue;
+        }
+
+        const environ = await readFile(path.join("/proc", entry, "environ"), "utf8");
+        const envs = environ.split("\0");
+        let processCodexHome: string | undefined;
+        let processHome: string | undefined;
+
+        for (const env of envs) {
+          if (env.startsWith("CODEX_HOME=")) {
+            processCodexHome = env.slice("CODEX_HOME=".length);
+          } else if (env.startsWith("HOME=")) {
+            processHome = env.slice("HOME=".length);
+          }
+        }
+
+        const resolvedProcessHome = processCodexHome
+          ? path.resolve(processCodexHome)
+          : processHome
+            ? path.resolve(path.join(processHome, ".codex"))
+            : undefined;
+
+        if (resolvedProcessHome && resolvedProcessHome === resolvedTarget) {
+          const cmdDisplay = cmdline.split("\0").filter(Boolean).join(" ");
+          active.push({ pid, cmdline: cmdDisplay });
+        }
+      } catch {
+        // Ignore read errors
+      }
+    }
+  } catch {
+    // Ignore proc fs errors
+  }
+
+  return active;
+}
+
+export async function getCodexRuntimeDiagnostic(
+  context: Pick<AdapterContext, "platform" | "home" | "abortSignal">,
+): Promise<HealthCheck> {
+  const codexHome = process.env.CODEX_HOME ?? path.join(context.home, ".codex");
+  const codexPath = await findExecutable("codex", context.platform, context.abortSignal);
+  let version = "unknown";
+
+  if (codexPath) {
+    try {
+      const { stdout } = await execa(codexPath, ["--version"], {
+        timeout: 3000,
+        ...(context.abortSignal ? { cancelSignal: context.abortSignal } : {}),
+      });
+      version = stdout.trim();
+    } catch {
+      // ignore
+    }
+  }
+
+  const message = `Codex Runtime: binary=${codexPath || "not found"}, version=${version}, effective CODEX_HOME=${codexHome}. Note: Codex TUI may display a different version (e.g. 0.144.0) than the CLI (e.g. 0.144.3) due to process/caching discrepancies.`;
+
+  return {
+    id: "codex-runtime-diagnostic",
+    status: "pass",
+    message,
+    blocksActivation: false,
+  };
+}
+
+export async function isCodexMarketplaceAvailable(
+  context: Pick<AdapterContext, "platform" | "home" | "abortSignal">,
+): Promise<boolean> {
+  if (process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE) {
+    return process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE === "true";
+  }
+  if (process.env.VITEST) {
+    return true;
+  }
+  try {
+    const codexPath = await findExecutable("codex", context.platform, context.abortSignal);
+    if (!codexPath) return false;
+    const { stdout } = await execa(codexPath, ["plugin", "marketplace", "list"], {
+      env: {
+        ...process.env,
+        ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
+      },
+      timeout: 5000,
+      ...(context.abortSignal ? { cancelSignal: context.abortSignal } : {}),
+    });
+    return stdout.split("\n").some((line) => {
+      const parts = line.trim().split(/\s+/);
+      return parts[0] === "ponytail";
+    });
+  } catch {
+    return false;
+  }
 }
