@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { access, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { trackInFlight } from "@dont-waste/core";
 import { execa } from "execa";
@@ -286,11 +286,23 @@ export async function getCodexRuntimeDiagnostic(
     }
   }
 
-  const message = `Codex Runtime: binary=${codexPath || "not found"}, version=${version}, effective CODEX_HOME=${codexHome}.`;
+  let authState = "unknown";
+  try {
+    await access(path.join(codexHome, "auth.json"));
+    authState = "auth.json present";
+  } catch {
+    authState = "auth.json missing (codex login required)";
+  }
+
+  const orcaNote = codexHome.includes("codex-runtime-home")
+    ? " Orca managed home: also keep MCP/plugins in the Windows system ~/.codex because Orca merges system config into runtime and only preserves hooks/projects from runtime."
+    : "";
+
+  const message = `Codex Runtime: binary=${codexPath || "not found"}, version=${version}, effective CODEX_HOME=${codexHome}, ${authState}.${orcaNote}`;
 
   return {
     id: "codex-runtime-diagnostic",
-    status: "pass",
+    status: authState.includes("missing") ? "warn" : "pass",
     message,
     blocksActivation: false,
   };

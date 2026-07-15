@@ -334,8 +334,28 @@ export class PonytailAdapter extends BaseAdapter {
         if (codexActive) {
           return [];
         }
+        // Orphan marketplace dir (on disk, not in `marketplace list`) makes
+        // `marketplace add` fail with "already added from a different source".
+        // Native `marketplace remove` clears that dir; then add + plugin succeed.
+        if (staleDirExists && !marketplaceAvailable) {
+          return [
+            {
+              command: "codex",
+              args: ["plugin", "marketplace", "remove", "ponytail"],
+              label: "Remove orphan Ponytail marketplace from Codex",
+              optional: true,
+            },
+            ...planned.filter(
+              (cmd) =>
+                isMarketplaceRegistration(cmd) ||
+                isMarketplaceDependentPlugin(cmd) ||
+                cmd.interactive,
+            ),
+          ];
+        }
         return planned.filter((cmd) => {
           if (isMarketplaceDependentPlugin(cmd)) {
+            // Plan plugin alongside marketplace add; install gate checks visibility.
             return !staleDirExists;
           }
           if (isMarketplaceRegistration(cmd)) {
@@ -359,16 +379,14 @@ export class PonytailAdapter extends BaseAdapter {
         warnings.push(
           `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Codex Ponytail plugin installation is blocked/deferred.`,
         );
-      } else {
-        if (staleDirExists && !marketplaceAvailable) {
-          warnings.push(
-            "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration. Plugin installation is deferred. Please resolve this conflict first.",
-          );
-        } else if (!marketplaceAvailable) {
-          warnings.push(
-            "Codex Ponytail plugin installation is planned to run after registering the ponytail marketplace.",
-          );
-        }
+      } else if (staleDirExists && !marketplaceAvailable) {
+        warnings.push(
+          "Orphan Ponytail marketplace directory detected; Don’t Waste will run `codex plugin marketplace remove ponytail` then re-register the official source.",
+        );
+      } else if (!marketplaceAvailable) {
+        warnings.push(
+          "Codex Ponytail plugin installation is planned to run after registering the ponytail marketplace.",
+        );
       }
     }
 
@@ -420,29 +438,6 @@ export class PonytailAdapter extends BaseAdapter {
           skipped: plan.commands,
           errors: [
             `Active Codex processes detected targeting CODEX_HOME (PIDs: ${active.map((p) => p.pid).join(", ")}). Deferring Ponytail Codex installation to prevent overwriting/conflicts.`,
-          ],
-        };
-      }
-
-      const codexHome =
-        process.env.CODEX_HOME ?? path.join(context.home, ".codex");
-      const staleMarketplaceDir = path.join(
-        codexHome,
-        ".tmp",
-        "marketplaces",
-        "ponytail",
-      );
-      const staleDirExists = await directoryExists(staleMarketplaceDir);
-      const marketplaceAvailableBefore =
-        await isCodexMarketplaceAvailable(context);
-
-      if (staleDirExists && !marketplaceAvailableBefore) {
-        return {
-          succeeded: false,
-          executed: [],
-          skipped: plan.commands,
-          errors: [
-            "Stale hidden Ponytail marketplace detected without registration. Codex Ponytail plugin installation is deferred/blocked. Please resolve this conflict first.",
           ],
         };
       }
@@ -613,22 +608,16 @@ export class PonytailAdapter extends BaseAdapter {
       if (staleDirExists && !marketplaceAvailable) {
         checks.push({
           id: "ponytail-codex-marketplace-conflict",
-          status: "fail",
+          status: "warn",
           message:
-            "Stale hidden Ponytail marketplace detected under CODEX_HOME/.tmp/marketplaces/ponytail without registration" +
+            "Orphan Ponytail marketplace directory exists without registration; next install will remove and re-register it" +
             mcpExplanatoryNote,
-          remediation: `A conflicting user-owned ponytail marketplace directory exists but is not registered.
-To migrate:
-  1. Ensure all Codex processes are closed.
-  2. Run:
-     mv "${staleMarketplaceDir}" "${staleMarketplaceDir}.dont-waste-backup-\$(date +%Y%m%d-%H%M%S)"
-  3. Re-run 'dont-waste init' to register and install Ponytail.
-To reverse:
-  1. Close all Codex processes.
-  2. Run:
-     rm -rf "${staleMarketplaceDir}"
-     mv "${staleMarketplaceDir}.dont-waste-backup-<timestamp>" "${staleMarketplaceDir}"`,
-          blocksActivation: true,
+          remediation: `Close all Codex sessions, then run:
+  codex plugin marketplace remove ponytail
+  codex plugin marketplace add DietrichGebert/ponytail
+  codex plugin add ponytail@ponytail
+Or re-run dont-waste init (plans the same recovery).`,
+          blocksActivation: false,
         });
       } else {
         checks.push({

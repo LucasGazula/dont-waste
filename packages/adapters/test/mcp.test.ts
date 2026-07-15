@@ -91,6 +91,32 @@ describe("mcp registration", () => {
     );
   });
 
+  it("mirrors Codex MCP into system ~/.codex when CODEX_HOME is Orca-managed", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const managed = path.join(home, "codex-runtime-home", "home");
+    await mkdir(managed, { recursive: true });
+    const previous = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = managed;
+    try {
+      const result = await registerHeadroomMcp(
+        "codex",
+        headroomMcpSpec("/opt/headroom"),
+        { home, platform: "linux" },
+      );
+      expect(result.status).toBe("registered");
+      await expect(
+        readFile(path.join(managed, "config.toml"), "utf8"),
+      ).resolves.toContain("[mcp_servers.headroom]");
+      await expect(
+        readFile(path.join(home, ".codex", "config.toml"), "utf8"),
+      ).resolves.toContain("[mcp_servers.headroom]");
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("writes codex configuration with comments and markers", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
     const spec = headroomMcpSpec("/usr/local/bin/headroom");
@@ -155,6 +181,40 @@ describe("mcp registration", () => {
     const content = await readFile(file, "utf8");
     expect(content).toContain("[mcp_servers.headroom]");
     expect(content).toContain("# --- end Headroom MCP server ---");
+    expect(content.match(/# --- Headroom MCP server ---/g)).toHaveLength(1);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("repairs an orphan Headroom start marker followed by unrelated sections", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-mcp-"));
+    const file = path.join(home, ".codex", "config.toml");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      [
+        'model = "gpt-5.6-terra"',
+        "",
+        "# --- Headroom MCP server ---",
+        "",
+        '[hooks.state."/tmp/hooks.json:session_start:0:0"]',
+        "enabled = true",
+        'trusted_hash = "sha256:abc"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await registerHeadroomMcp(
+      "codex",
+      headroomMcpSpec("/opt/headroom"),
+      { home, platform: "linux" },
+    );
+
+    expect(result).toMatchObject({ status: "registered" });
+    const content = await readFile(file, "utf8");
+    expect(content).toContain("[mcp_servers.headroom]");
+    expect(content).toContain("# --- end Headroom MCP server ---");
+    expect(content).toContain("[hooks.state.");
     expect(content.match(/# --- Headroom MCP server ---/g)).toHaveLength(1);
     await rm(home, { recursive: true, force: true });
   });

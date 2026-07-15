@@ -1,8 +1,25 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PonytailAdapter, resolvePonytailMode } from "../src/ponytail.js";
+
+const inheritedCodexHome = process.env.CODEX_HOME;
+const inheritedMarketplaceMock = process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE;
+
+beforeEach(() => {
+  // Isolate from the developer’s real Codex home (e.g. Orca-managed installs).
+  delete process.env.CODEX_HOME;
+  delete process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE;
+});
+
+afterEach(() => {
+  if (inheritedCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = inheritedCodexHome;
+  if (inheritedMarketplaceMock === undefined)
+    delete process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE;
+  else process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = inheritedMarketplaceMock;
+});
 
 describe("ponytail mode persistence", () => {
   it("maps unsupported catalog modes to full", () => {
@@ -61,6 +78,9 @@ describe("ponytail mode persistence", () => {
 
   it("preserves a rejected Codex marketplace without aborting other Ponytail steps", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    const codexHome = path.join(home, "codex-home");
+    process.env.CODEX_HOME = codexHome;
+    process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = "false";
     try {
       const adapter = new PonytailAdapter();
       const context = {
@@ -119,13 +139,15 @@ describe("ponytail mode persistence", () => {
         "Open Codex /hooks to trust Ponytail hooks, then start a new thread",
       ]);
     } finally {
-      delete process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE;
       await rm(home, { recursive: true, force: true });
     }
   });
 
   it("uses Ponytail's official non-interactive Codex plugin command", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    const codexHome = path.join(home, "codex-home");
+    process.env.CODEX_HOME = codexHome;
+    process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = "false";
     const plan = await new PonytailAdapter().planInstall(
       { mode: "full", features: {} },
       {
@@ -156,6 +178,8 @@ describe("ponytail mode persistence", () => {
 
   it("does not let global Ponytail state suppress a different host's install", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    process.env.CODEX_HOME = path.join(home, "codex-home");
+    process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = "false";
     await mkdir(path.join(home, ".config", "ponytail"), { recursive: true });
     await writeFile(
       path.join(home, ".config", "ponytail", "config.json"),
@@ -196,6 +220,8 @@ describe("ponytail mode persistence", () => {
 
   it("skips only the Claude commands when Claude has Ponytail enabled", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
+    process.env.CODEX_HOME = path.join(home, "codex-home");
+    process.env.DONT_WASTE_MOCK_CODEX_MARKETPLACE = "false";
     await mkdir(path.join(home, ".claude"), { recursive: true });
     await writeFile(
       path.join(home, ".claude", "settings.json"),
@@ -228,7 +254,7 @@ describe("ponytail mode persistence", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("reports a conflict when a stale hidden Ponytail marketplace exists without registration", async () => {
+  it("reports a recoverable orphan Ponytail marketplace without registration", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
     const codexHome = path.join(home, "codex-home");
     const previousCodexHome = process.env.CODEX_HOME;
@@ -253,11 +279,12 @@ describe("ponytail mode persistence", () => {
         (c) => c.id === "ponytail-codex-marketplace-conflict",
       );
       expect(conflictCheck).toBeDefined();
-      expect(conflictCheck?.status).toBe("fail");
-      expect(conflictCheck?.message).toContain(
-        "Stale hidden Ponytail marketplace detected",
+      expect(conflictCheck?.status).toBe("warn");
+      expect(conflictCheck?.blocksActivation).toBe(false);
+      expect(conflictCheck?.message).toContain("Orphan Ponytail marketplace");
+      expect(conflictCheck?.remediation).toContain(
+        "codex plugin marketplace remove ponytail",
       );
-      expect(conflictCheck?.remediation).toContain("mv ");
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -302,7 +329,7 @@ describe("ponytail mode persistence", () => {
     }
   });
 
-  it("blocks Ponytail installation on stale marketplace conflict", async () => {
+  it("plans orphan marketplace remove before re-registering Ponytail", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dont-waste-ponytail-"));
     const codexHome = path.join(home, "codex-home");
     const previousCodexHome = process.env.CODEX_HOME;
@@ -324,16 +351,22 @@ describe("ponytail mode persistence", () => {
         },
       );
 
-      const result = await adapter.install(plan, {
-        platform: "linux",
-        home,
-        selectedAgents: ["codex"],
-        dryRun: false,
+      expect(plan.commands[0]).toMatchObject({
+        command: "codex",
+        args: ["plugin", "marketplace", "remove", "ponytail"],
       });
-
-      expect(result.succeeded).toBe(false);
-      expect(result.errors[0]).toContain(
-        "Stale hidden Ponytail marketplace detected",
+      expect(plan.commands).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            args: ["plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+          }),
+          expect.objectContaining({
+            args: ["plugin", "add", "ponytail@ponytail"],
+          }),
+        ]),
+      );
+      expect(plan.warnings.some((w) => w.includes("Orphan Ponytail"))).toBe(
+        true,
       );
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

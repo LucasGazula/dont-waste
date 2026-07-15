@@ -413,11 +413,13 @@ Pacote publicável: `dont-waste` (`apps/cli`) — `bin` → `./dist/main.js`, `f
 | Doctor falha em tool       | Tool não está no PATH / não está enabled na config                                                               |
 | Collect vazio              | Ferramenta sem métricas ainda; Ponytail é sempre unavailable; Caveman precisa de `DONT_WASTE_CAVEMAN_STATS_FILE` |
 | Alterações no HOME errado  | Defina `DONT_WASTE_DATA_DIR` (e `HOME` temporário) **antes** de `init`                                           |
+| Codex MCP/Ponytail some após abrir no Orca | Orca faz merge de `~/.codex` → `codex-runtime-home`; veja [`docs/codex-orca-dual-home.md`](docs/codex-orca-dual-home.md) |
 | Esperava paridade upstream | Leia [`docs/upstream-capability-audit.md`](docs/upstream-capability-audit.md)                                    |
 
 ---
 
 ## Documentação relacionada
 
+- [`docs/codex-orca-dual-home.md`](docs/codex-orca-dual-home.md) — Codex sob Orca: dual-home, wipe de MCP/plugins, reparo
 - [`docs/upstream-capability-audit.md`](docs/upstream-capability-audit.md) — auditoria Don’t Waste × Caveman / Ponytail / Headroom / RTK
 - [`HANDOFF.md`](HANDOFF.md) — estado do branch e pendências de release

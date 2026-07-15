@@ -120,6 +120,26 @@ export function codexConfigPath(context: Pick<AdapterContext, "home">): string {
   );
 }
 
+/**
+ * Orca merges system `~/.codex/config.toml` into managed
+ * `…/codex-runtime-home/home`, preserving only runtime hooks/projects.
+ * MCP/plugins written only to the managed home are wiped on the next sync.
+ * When CODEX_HOME is Orca-managed, also configure the Linux system home.
+ */
+export function resolveCodexHomes(
+  context: Pick<AdapterContext, "home">,
+): string[] {
+  const primary = path.resolve(
+    process.env.CODEX_HOME ?? path.join(context.home, ".codex"),
+  );
+  const homes = [primary];
+  if (primary.includes(`${path.sep}codex-runtime-home${path.sep}`)) {
+    const system = path.resolve(path.join(context.home, ".codex"));
+    if (system !== primary) homes.push(system);
+  }
+  return homes;
+}
+
 export function claudeMcpConfigPath(
   context: Pick<AdapterContext, "home">,
 ): string {
@@ -276,21 +296,10 @@ export async function readMcpServer(
   }
 }
 
-async function registerCodex(
+async function registerCodexAtFile(
+  file: string,
   spec: McpServerSpec,
-  context: Pick<AdapterContext, "home" | "platform">,
 ): Promise<McpRegisterResult> {
-  const file = codexConfigPath(context);
-  const activeProcesses = await getActiveCodexProcesses(context);
-  if (activeProcesses.length > 0) {
-    const pids = activeProcesses.map((p) => p.pid).join(", ");
-    return {
-      agent: "codex",
-      status: "failed",
-      path: file,
-      detail: `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Deferring registration to avoid overwrite on exit.`,
-    };
-  }
   let content = "";
   try {
     content = await readFile(file, "utf8");
@@ -302,11 +311,20 @@ async function registerCodex(
   const start = content.indexOf(MARKER_START);
   const block = renderCodexBlock(spec);
 
-  // Only repair a marker that was interrupted before any configuration was
-  // emitted. A non-empty fragment can contain user data and remains intact.
+  // Orphan start marker: Orca/host rewrites can leave the comment while
+  // stripping [mcp_servers.headroom]. Unrelated sections after the marker
+  // (hooks.state, projects) must not block repair when no server block exists.
   if (hasStart && !hasEnd) {
-    const fragment = content.slice(start + MARKER_START.length);
-    if (fragment.trim()) {
+    const orphanExisting = parseCodexServer(content, spec.name);
+    if (orphanExisting && specsMatch(orphanExisting, spec)) {
+      return {
+        agent: "codex",
+        status: "already",
+        path: file,
+        detail: "matches current configuration",
+      };
+    }
+    if (orphanExisting) {
       return {
         agent: "codex",
         status: "mismatch",
@@ -314,15 +332,18 @@ async function registerCodex(
         detail: "incomplete Headroom marker block has content; left untouched",
       };
     }
-    await writeAtomically(
-      file,
-      `${content.slice(0, start).replace(/\n*$/, "")}\n\n${block}\n`,
-    );
+    const withoutOrphan = `${content.slice(0, start)}${content.slice(start + MARKER_START.length)}`;
+    const cleaned = withoutOrphan
+      .replace(/^\n+/, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/\n*$/, "");
+    const next = cleaned ? `${cleaned}\n\n${block}\n` : `${block}\n`;
+    await writeAtomically(file, next);
     return {
       agent: "codex",
       status: "registered",
       path: file,
-      detail: `repaired incomplete marker block in ${file}`,
+      detail: `repaired orphan Headroom start marker in ${file}`,
     };
   }
   const existing = parseCodexServer(content, spec.name);
@@ -364,6 +385,53 @@ async function registerCodex(
     status: "registered",
     path: file,
     detail: `wrote ${file}`,
+  };
+}
+
+async function registerCodex(
+  spec: McpServerSpec,
+  context: Pick<AdapterContext, "home" | "platform">,
+): Promise<McpRegisterResult> {
+  const primary = codexConfigPath(context);
+  const activeProcesses = await getActiveCodexProcesses(context);
+  if (activeProcesses.length > 0) {
+    const pids = activeProcesses.map((p) => p.pid).join(", ");
+    return {
+      agent: "codex",
+      status: "failed",
+      path: primary,
+      detail: `Active Codex processes detected targeting CODEX_HOME (PIDs: ${pids}). Deferring registration to avoid overwrite on exit.`,
+    };
+  }
+
+  const homes = resolveCodexHomes(context);
+  const results: McpRegisterResult[] = [];
+  for (const home of homes) {
+    results.push(await registerCodexAtFile(path.join(home, "config.toml"), spec));
+  }
+
+  const failed = results.find((result) => result.status === "failed");
+  if (failed) return failed;
+  const mismatch = results.find((result) => result.status === "mismatch");
+  if (mismatch) return mismatch;
+  const registered = results.find((result) => result.status === "registered");
+  if (registered) {
+    const mirrored = results
+      .map((result) => result.path)
+      .filter((item): item is string => Boolean(item));
+    return {
+      ...registered,
+      detail:
+        mirrored.length > 1
+          ? `${registered.detail} (also mirrored to Orca system ~/.codex)`
+          : registered.detail,
+    };
+  }
+  return results[0] ?? {
+    agent: "codex",
+    status: "failed",
+    path: primary,
+    detail: "no Codex home resolved",
   };
 }
 
